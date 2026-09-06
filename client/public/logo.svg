@@ -1,0 +1,44 @@
+<svg width="240" height="64" viewBox="0 0 240 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="navyBg2" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#0D1322" />
+      <stop offset="100%" stopColor="#070B14" />
+    </linearGradient>
+    <linearGradient id="calcGrad2" x1="33" y1="20" x2="67" y2="80" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stopColor="#8B5CF6" />
+      <stop offset="50%" stopColor="#7C3AED" />
+      <stop offset="100%" stopColor="#6D28D9" />
+    </linearGradient>
+  </defs>
+
+  <!-- Left Icon -->
+  <g transform="translate(6, 6) scale(0.52)">
+    <rect width="100" height="100" rx="26" fill="url(#navyBg2)" />
+    <rect x="0.75" y="0.75" width="98.5" height="98.5" rx="25.25" stroke="rgba(255, 255, 255, 0.12)" strokeWidth="1.5" />
+
+    {/* Calculator */}
+    <rect x="33" y="22" width="34" height="56" rx="8" fill="url(#calcGrad2)" />
+    <path d="M 37 22 L 63 22" stroke="rgba(255, 255, 255, 0.45)" strokeWidth="1.5" strokeLinecap="round" />
+
+    <rect x="38" y="28" width="24" height="12" rx="3.5" fill="#0B0F19" />
+    <rect x="42" y="32" width="6" height="3.5" rx="1.5" fill="#C084FC" />
+    <rect x="51" y="32" width="7" height="3.5" rx="1.5" fill="#A855F7" />
+
+    <circle cx="43.5" cy="48.5" r="3" fill="#FFFFFF" fillOpacity="0.95" />
+    <circle cx="56.5" cy="48.5" r="3" fill="#FFFFFF" fillOpacity="0.95" />
+
+    <circle cx="43.5" cy="58.5" r="3" fill="#FFFFFF" fillOpacity="0.95" />
+    <circle cx="56.5" cy="58.5" r="3" fill="#FFFFFF" fillOpacity="0.95" />
+
+    <circle cx="43.5" cy="68.5" r="3" fill="#DDD6FE" />
+    <rect x="52.5" y="66" width="8" height="5" rx="2" fill="#F43F5E" />
+  </g>
+
+  <!-- Typography: CHITI -->
+  <text x="74" y="38" font-family="'Plus Jakarta Sans', system-ui, sans-serif" font-weight="900" font-size="28" letter-spacing="1.5" fill="#FFFFFF">
+    CHITI
+  </text>
+  <text x="75" y="52" font-family="'Plus Jakarta Sans', system-ui, sans-serif" font-weight="700" font-size="10" letter-spacing="2" fill="#94A3B8">
+    AGENT PLATFORM
+  </text>
+</svg>

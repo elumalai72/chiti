@@ -1,0 +1,180 @@
+import { CalculationRule, SurplusStrategy } from '../types';
+
+export interface AuctionCalculationInput {
+  grossMonthlyPool: number; // e.g. 1,23,000
+  openingCarryForward: number; // e.g. 0 or surplus from previous month
+  winningBid: number; // e.g. 1,10,000
+  totalMembers: number; // e.g. 41
+  monthlyContribution: number; // e.g. 3,000
+  rule: CalculationRule;
+}
+
+export interface AuctionCalculationResult {
+  effectivePool: number; // grossMonthlyPool + openingCarryForward
+  winningBid: number; // Net cash paid to the auction winner (e.g. 1,10,000)
+  grossDiscount: number; // effectivePool - winningBid (e.g. 13,000)
+  agentCommission: number; // e.g. 5,000
+  netPayout: number; // winningBid
+  surplusAmount: number; // grossDiscount - agentCommission (e.g. 8,000)
+  surplusStrategy: SurplusStrategy;
+  perMemberDividend: number; // e.g. Math.floor(8000 / 41) = 195
+  totalDividendDistributed: number; // 195 * 41 = 7,995
+  closingCarryForward: number; // Remainder (5) or full surplus depending on strategy
+  nextMonthMemberDue: number; // 3000 - 195 = 2,805 (if dividend deduction)
+  formulaDescription: string;
+}
+
+/**
+ * Calculates expected monthly collection pool:
+ * Total Members × Monthly Contribution
+ * e.g., 41 × ₹3,000 = ₹1,23,000
+ */
+export function calculateExpectedMonthlyPool(totalMembers: number, monthlyContribution: number): number {
+  if (totalMembers <= 0 || monthlyContribution <= 0) return 0;
+  return totalMembers * monthlyContribution;
+}
+
+/**
+ * Calculates agent commission based on the configured rule.
+ */
+export function calculateCommission(
+  effectivePool: number,
+  grossDiscount: number,
+  rule: CalculationRule
+): number {
+  switch (rule.commissionType) {
+    case 'FIXED':
+      return Math.min(rule.commissionValue, grossDiscount);
+    case 'PERCENT_POOL':
+      return Math.round((effectivePool * rule.commissionValue) / 100);
+    case 'PERCENT_DISCOUNT':
+      return Math.round((grossDiscount * rule.commissionValue) / 100);
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Core Modular Auction Calculation Engine.
+ * Implements the verified workflow from the Agent's handwritten book register:
+ * 
+ * 1. Effective Pool = Expected Collection + Carry Forward
+ * 2. Winner Bids lowest acceptable amount (e.g. ₹1,10,000)
+ * 3. Gross Discount = Pool - Winning Bid (e.g. ₹1,23,000 - ₹1,10,000 = ₹13,000)
+ * 4. Agent Commission deducted from Gross Discount (e.g. ₹5,000)
+ * 5. Surplus = Gross Discount - Commission (e.g. ₹13,000 - ₹5,000 = ₹8,000)
+ * 6. Surplus allocated according to configurable strategy:
+ *    - DIVIDEND_DEDUCTION: Each of 41 members gets ₹195 credit on next month's payment
+ *    - POOL_CARRY_FORWARD: ₹8,000 carried to Month N+1 auction pool
+ *    - CASH_DIVIDEND: Paid back in cash
+ *    - SECOND_AUCTION_RESERVE: Reserved for secondary micro-draw/lending pot
+ */
+export function calculateAuctionOutcome(input: AuctionCalculationInput): AuctionCalculationResult {
+  const effectivePool = input.grossMonthlyPool + input.openingCarryForward;
+  const winningBid = input.winningBid;
+  
+  if (winningBid > effectivePool) {
+    throw new Error(`Winning bid (₹${winningBid}) cannot exceed total available pool (₹${effectivePool})`);
+  }
+
+  const grossDiscount = effectivePool - winningBid;
+  const agentCommission = calculateCommission(effectivePool, grossDiscount, input.rule);
+  const surplusAmount = Math.max(0, grossDiscount - agentCommission);
+
+  let perMemberDividend = 0;
+  let totalDividendDistributed = 0;
+  let closingCarryForward = 0;
+  let nextMonthMemberDue = input.monthlyContribution;
+
+  switch (input.rule.surplusStrategy) {
+    case 'DIVIDEND_DEDUCTION': {
+      perMemberDividend = Math.floor(surplusAmount / input.totalMembers);
+      totalDividendDistributed = perMemberDividend * input.totalMembers;
+      // Remainder (e.g. 8000 - 7995 = 5) carried forward so no paisa is lost
+      closingCarryForward = surplusAmount - totalDividendDistributed;
+      nextMonthMemberDue = Math.max(0, input.monthlyContribution - perMemberDividend);
+      break;
+    }
+    case 'POOL_CARRY_FORWARD': {
+      perMemberDividend = 0;
+      totalDividendDistributed = 0;
+      closingCarryForward = surplusAmount;
+      nextMonthMemberDue = input.monthlyContribution;
+      break;
+    }
+    case 'CASH_DIVIDEND': {
+      perMemberDividend = Math.floor(surplusAmount / input.totalMembers);
+      totalDividendDistributed = perMemberDividend * input.totalMembers;
+      closingCarryForward = surplusAmount - totalDividendDistributed;
+      nextMonthMemberDue = input.monthlyContribution;
+      break;
+    }
+    case 'SECOND_AUCTION_RESERVE': {
+      perMemberDividend = 0;
+      totalDividendDistributed = 0;
+      closingCarryForward = surplusAmount;
+      nextMonthMemberDue = input.monthlyContribution;
+      break;
+    }
+  }
+
+  const formulaDescription = 
+    `Pool: ₹${effectivePool.toLocaleString('en-IN')} | Winning Bid: ₹${winningBid.toLocaleString('en-IN')} | ` +
+    `Discount: ₹${grossDiscount.toLocaleString('en-IN')} | Commission: ₹${agentCommission.toLocaleString('en-IN')} | ` +
+    `Surplus: ₹${surplusAmount.toLocaleString('en-IN')} (Strategy: ${input.rule.surplusStrategy})`;
+
+  return {
+    effectivePool,
+    winningBid,
+    grossDiscount,
+    agentCommission,
+    netPayout: winningBid,
+    surplusAmount,
+    surplusStrategy: input.rule.surplusStrategy,
+    perMemberDividend,
+    totalDividendDistributed,
+    closingCarryForward,
+    nextMonthMemberDue,
+    formulaDescription
+  };
+}
+
+/**
+ * Reconciles monthly financials to ensure zero leakage before month closure.
+ * Invariant:
+ * Inflows (Actual Collected + Opening Carry Forward) ==
+ * Outflows (Net Payout + Agent Commission + Total Dividend Distributed + Closing Carry Forward)
+ */
+export function reconcileMonthlyFinancials(params: {
+  actualCollected: number;
+  openingCarryForward: number;
+  netPayout: number;
+  agentCommission: number;
+  totalDividendDistributed: number;
+  closingCarryForward: number;
+}): { isBalanced: boolean; totalInflows: number; totalOutflows: number; variance: number } {
+  const totalInflows = params.actualCollected + params.openingCarryForward;
+  const totalOutflows = 
+    params.netPayout + 
+    params.agentCommission + 
+    params.totalDividendDistributed + 
+    params.closingCarryForward;
+  
+  const variance = Math.abs(totalInflows - totalOutflows);
+  const isBalanced = variance === 0;
+
+  return {
+    isBalanced,
+    totalInflows,
+    totalOutflows,
+    variance
+  };
+}
+
+/**
+ * Formats numbers into standard Indian Currency format (e.g. ₹1,23,000)
+ */
+export function formatINR(amount: number): string {
+  if (isNaN(amount) || amount === null || amount === undefined) return '₹0';
+  return '₹' + amount.toLocaleString('en-IN');
+}
