@@ -9,13 +9,13 @@ interface AuthViewProps {
 }
 
 export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
-  const [mode, setMode] = useState<'PHONE_ENTRY' | 'OTP_VERIFY' | 'REGISTER'>('PHONE_ENTRY');
+  const [mode, setMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
   // Fields
   const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
+  const [password, setPassword] = useState('');
   
   // Registration fields
   const [name, setName] = useState('');
@@ -23,40 +23,31 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
   const [town, setTown] = useState('');
   const [stateName, setStateName] = useState('Andhra Pradesh');
 
-  const handleSendOTP = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setIsLoading(true);
-    try {
-      if (!phone.trim() || phone.trim().length < 10) {
-        throw new Error('Please enter a valid 10-digit mobile number');
-      }
-      await dbService.sendOTP(phone);
-      setMode('OTP_VERIFY');
-    } catch (err: any) {
-      setError(err.message || 'Failed to send OTP');
-    } finally {
-      setIsLoading(false);
-    }
+  // Basic sanitization utility for extra peace of mind against SQL/XSS
+  const sanitizeInput = (str: string) => {
+    if (!str) return '';
+    return str.replace(/['";\-/\*]/g, '');
   };
 
-  const handleVerifyOTP = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
     try {
-      if (!otp.trim()) throw new Error('Please enter the OTP');
+      const cleanPhone = sanitizeInput(phone).trim();
+      const cleanPassword = sanitizeInput(password);
       
-      const agent = await dbService.verifyOTP(phone, otp);
-      if (agent) {
-        // Agent exists, log them in!
-        onAuthenticated(agent);
-      } else {
-        // Agent does not exist, move to registration
-        setMode('REGISTER');
+      if (!cleanPhone || cleanPhone.length < 10) {
+        throw new Error('Please enter a valid 10-digit mobile number');
       }
+      if (!cleanPassword) {
+        throw new Error('Please enter your password');
+      }
+
+      const agent = await dbService.loginAgent(cleanPhone, cleanPassword);
+      onAuthenticated(agent);
     } catch (err: any) {
-      setError(err.message || 'OTP Verification failed');
+      setError(err.message || 'Login failed');
     } finally {
       setIsLoading(false);
     }
@@ -67,17 +58,25 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
     setError('');
     setIsLoading(true);
     try {
-      if (!name.trim()) throw new Error('Please enter your full name');
-      if (!businessName.trim()) throw new Error('Please enter your business name');
-      if (!town.trim()) throw new Error('Please enter your town or city');
+      const cleanPhone = sanitizeInput(phone).trim();
+      const cleanName = sanitizeInput(name);
+      const cleanPassword = sanitizeInput(password);
+      const cleanBusiness = sanitizeInput(businessName);
+      const cleanTown = sanitizeInput(town);
+
+      if (!cleanPhone || cleanPhone.length < 10) throw new Error('Please enter a valid 10-digit mobile number');
+      if (!cleanPassword || cleanPassword.length < 6) throw new Error('Password must be at least 6 characters');
+      if (!cleanName.trim()) throw new Error('Please enter your full name');
+      if (!cleanBusiness.trim()) throw new Error('Please enter your business name');
+      if (!cleanTown.trim()) throw new Error('Please enter your town or city');
 
       const agent = await dbService.registerAgent({
-        name,
-        phone,
-        password: 'otp-authenticated', // We don't use passwords anymore
-        businessName,
-        town,
-        state: stateName
+        name: cleanName,
+        phone: cleanPhone,
+        password: cleanPassword,
+        businessName: cleanBusiness,
+        town: cleanTown,
+        state: sanitizeInput(stateName)
       });
       onAuthenticated(agent);
     } catch (err: any) {
@@ -118,12 +117,11 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
       >
         <div style={{ textAlign: 'center', marginBottom: '20px' }}>
           <h2 style={{ fontSize: '20px', fontWeight: 800 }}>
-            {mode === 'PHONE_ENTRY' ? 'Welcome to Agent Hub' : mode === 'OTP_VERIFY' ? 'Verify Mobile Number' : 'Complete Profile'}
+            {mode === 'LOGIN' ? 'Welcome Back' : 'Create Agent Account'}
           </h2>
           <p style={{ fontSize: '13px', color: '#64748B', marginTop: '4px' }}>
-            {mode === 'PHONE_ENTRY' ? 'Enter your mobile number to sign in or register.' 
-            : mode === 'OTP_VERIFY' ? `Enter the 6-digit OTP sent to ${phone}` 
-            : 'You are authenticated! Let us know your details.'}
+            {mode === 'LOGIN' ? 'Enter your mobile number and password to sign in.' 
+            : 'Fill in your details to get started with Chiti Management.'}
           </p>
         </div>
 
@@ -139,9 +137,9 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
           </div>
         )}
 
-        {/* STEP 1: PHONE ENTRY */}
-        {mode === 'PHONE_ENTRY' && (
-          <form onSubmit={handleSendOTP} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        {/* LOGIN MODE */}
+        {mode === 'LOGIN' && (
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
               <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
                 Mobile Number
@@ -151,8 +149,25 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
                 <input
                   type="tel"
                   value={phone}
-                  onChange={e => setPhone(e.target.value)}
+                  onChange={e => setPhone(e.target.value.replace(/[^0-9]/g, ''))}
                   placeholder="e.g. 9876543210"
+                  style={{ width: '100%', paddingLeft: '40px' }}
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                Password
+              </label>
+              <div style={{ position: 'relative' }}>
+                <KeyRound size={18} color="#94A3B8" style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }} />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Enter your password"
                   style={{ width: '100%', paddingLeft: '40px' }}
                   required
                 />
@@ -165,62 +180,58 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
               className="btn btn-primary btn-block"
               style={{ minHeight: '48px', marginTop: '6px', fontSize: '15px' }}
             >
-              {isLoading ? <Loader2 size={16} className="spin" /> : <>Send OTP <ArrowRight size={16} /></>}
+              {isLoading ? <Loader2 size={16} className="spin" /> : <>Sign In <ArrowRight size={16} /></>}
             </button>
-            <div style={{ textAlign: 'center', marginTop: '12px', fontSize: '12px', color: '#94A3B8' }}>
-              For demo/testing, use any 10-digit number.
+
+            <div style={{ textAlign: 'center', marginTop: '16px' }}>
+              <button 
+                type="button" 
+                onClick={() => { setMode('REGISTER'); setError(''); }}
+                style={{ background: 'transparent', border: 'none', color: '#7C3AED', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Don't have an account? Sign up
+              </button>
             </div>
           </form>
         )}
 
-        {/* STEP 2: OTP VERIFY */}
-        {mode === 'OTP_VERIFY' && (
-          <form onSubmit={handleVerifyOTP} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        {/* REGISTER MODE */}
+        {mode === 'REGISTER' && (
+          <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div>
-              <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-                6-Digit OTP
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Mobile Number *
               </label>
               <div style={{ position: 'relative' }}>
-                <KeyRound size={18} color="#94A3B8" style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }} />
+                <Phone size={16} color="#94A3B8" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
                 <input
-                  type="text"
-                  inputMode="numeric"
-                  value={otp}
-                  onChange={e => setOtp(e.target.value)}
-                  placeholder="e.g. 123456"
-                  style={{ width: '100%', paddingLeft: '40px', letterSpacing: '2px', fontWeight: 700 }}
+                  type="tel"
+                  value={phone}
+                  onChange={e => setPhone(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder="e.g. 9876543210"
+                  style={{ width: '100%', paddingLeft: '36px' }}
                   required
-                  maxLength={6}
                 />
               </div>
             </div>
 
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="btn btn-primary btn-block"
-              style={{ minHeight: '48px', marginTop: '6px', fontSize: '15px' }}
-            >
-              {isLoading ? <Loader2 size={16} className="spin" /> : <>Verify & Continue <ArrowRight size={16} /></>}
-            </button>
-
-            <button 
-              type="button" 
-              onClick={() => { setMode('PHONE_ENTRY'); setError(''); setOtp(''); }}
-              style={{ background: 'transparent', border: 'none', color: '#7C3AED', fontSize: '13px', fontWeight: 600, cursor: 'pointer', marginTop: '4px' }}
-            >
-              Change Mobile Number
-            </button>
-            
-            <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '12px', color: '#94A3B8' }}>
-              (Use <b>123456</b> for this demo)
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                Password *
+              </label>
+              <div style={{ position: 'relative' }}>
+                <KeyRound size={16} color="#94A3B8" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)' }} />
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="Create a strong password"
+                  style={{ width: '100%', paddingLeft: '36px' }}
+                  required
+                />
+              </div>
             </div>
-          </form>
-        )}
 
-        {/* STEP 3: REGISTER */}
-        {mode === 'REGISTER' && (
-          <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div>
               <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
                 Full Name *
@@ -289,6 +300,16 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated }) => {
             >
               {isLoading ? <Loader2 size={18} className="spin" /> : <><ShieldCheck size={18} /> Complete Registration</>}
             </button>
+
+            <div style={{ textAlign: 'center', marginTop: '12px' }}>
+              <button 
+                type="button" 
+                onClick={() => { setMode('LOGIN'); setError(''); }}
+                style={{ background: 'transparent', border: 'none', color: '#64748B', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}
+              >
+                Already have an account? Sign in
+              </button>
+            </div>
           </form>
         )}
       </div>

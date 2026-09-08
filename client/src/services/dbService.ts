@@ -96,40 +96,6 @@ class DbService {
     return agent;
   }
 
-  // OTP Simulated Auth
-  public async sendOTP(phone: string): Promise<boolean> {
-    const clean = phone.trim();
-    if (clean.length < 10) throw new Error('Please enter a valid 10-digit mobile number.');
-    
-    // Simulate sending OTP (wait 1 second)
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // In production, you would call: await supabase.auth.signInWithOtp({ phone: clean })
-    return true; 
-  }
-
-  public async verifyOTP(phone: string, otp: string): Promise<AgentAccount | null> {
-    const cleanPhone = phone.trim();
-    if (otp !== '123456') {
-      // Hardcoded dummy OTP for testing
-      throw new Error('Invalid OTP. For testing, please use 123456');
-    }
-
-    // OTP is correct. Check if agent exists in our database.
-    const { data: agentData, error } = await supabase.from('agents').select('*').eq('phone', cleanPhone).maybeSingle();
-
-    if (!agentData) {
-      // OTP verified but user is not registered yet. 
-      // Return null so UI can prompt for registration details.
-      return null;
-    }
-
-    const agent = this.mapAgent(agentData);
-    this.currentAgentId = agent.id;
-    localStorage.setItem(CURRENT_AGENT_KEY, agent.id);
-    return agent;
-  }
-
   public logoutAgent() {
     this.currentAgentId = null;
     localStorage.removeItem(CURRENT_AGENT_KEY);

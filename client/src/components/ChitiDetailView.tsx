@@ -31,10 +31,11 @@ import {
 
 interface ChitiDetailViewProps {
   chitiId: string;
+  initialSubTab?: 'overview' | 'members' | 'payments' | 'mastersheet' | 'auction' | 'ledger' | 'settings';
   onBack: () => void;
 }
 
-export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBack }) => {
+export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, initialSubTab = 'overview', onBack }) => {
   const [currentAgent, setCurrentAgent] = useState<AgentAccount | null>(null);
   const [chiti, setChiti] = useState<Chiti | null>(null);
   const [chitMembers, setChitMembers] = useState<ChitMember[]>([]);
@@ -44,7 +45,8 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
   const [paymentsForCurrentMonth, setPaymentsForCurrentMonth] = useState<Payment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'members' | 'payments' | 'mastersheet' | 'auction' | 'ledger' | 'settings'>('overview');
+  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'members' | 'payments' | 'mastersheet' | 'auction' | 'ledger' | 'settings'>(initialSubTab);
+  const [selectedMonthNum, setSelectedMonthNum] = useState<number | null>(null);
   const [selectedMemberForPayment, setSelectedMemberForPayment] = useState<Member | null>(null);
   const [activeReceipt, setActiveReceipt] = useState<Receipt | null>(null);
   const [isAuctionOpen, setIsAuctionOpen] = useState<boolean>(false);
@@ -72,12 +74,14 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
         setChiti(c);
         if (!c) return;
 
+        const targetMonth = selectedMonthNum || c.currentMonth;
+        
         const [members, months, allMem, ledger, payments] = await Promise.all([
           dbService.getChitMembers(chitiId),
           dbService.getChitMonths(chitiId),
           dbService.getMembersByAgent(agent.id),
           dbService.getLedgerByAgent(agent.id, chitiId),
-          dbService.getPaymentsByMonth(chitiId, c.currentMonth)
+          dbService.getPaymentsByMonth(chitiId, targetMonth)
         ]);
 
         setChitMembers(members);
@@ -85,6 +89,10 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
         setAllMembers(allMem);
         setLedgerEntries(ledger);
         setPaymentsForCurrentMonth(payments);
+        
+        if (selectedMonthNum === null) {
+          setSelectedMonthNum(c.currentMonth);
+        }
       } catch (err) {
         console.error('Error loading chiti details:', err);
       } finally {
@@ -92,7 +100,7 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
       }
     }
     loadData();
-  }, [chitiId, rerender]);
+  }, [chitiId, selectedMonthNum, rerender]);
 
   const agentId = currentAgent?.id || '';
 
@@ -130,6 +138,9 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
 
   const eligibleMembers = chitMembers.filter(m => !m.hasWonAuction);
   const progressPercent = Math.min(100, Math.round((chiti.currentMonth / chiti.durationMonths) * 100));
+
+  const displayMonth = selectedMonthNum !== null ? 
+    (chitMonths.find(m => m.monthNumber === selectedMonthNum) || currentMonth) : currentMonth;
 
   const handleRecordPayment = async (amountPaid: number, method: any, notes?: string) => {
     if (!selectedMemberForPayment) return;
@@ -331,7 +342,7 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
         {[
           { id: 'overview', label: 'Overview', icon: BookOpen },
           { id: 'members', label: `Members (${chitMembers.length})`, icon: Users },
-          { id: 'payments', label: `Collect (M${currentMonth.monthNumber})`, icon: CreditCard },
+          { id: 'payments', label: `Collect (M${displayMonth.monthNumber})`, icon: CreditCard },
           { id: 'mastersheet', label: 'Master Sheet', icon: Grid },
           { id: 'auction', label: 'Live Auction', icon: Gavel },
           { id: 'ledger', label: 'Ledger Journal', icon: BookOpen },
@@ -581,7 +592,80 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
       {/* SUBTAB: PAYMENTS (COLLECT) */}
       {activeSubTab === 'payments' && (
         <div>
-          {/* Mobile Fast Collection Header Strip */}
+          {/* Horizontal Month Selector */}
+          <div style={{ marginBottom: '16px', overflowX: 'auto', display: 'flex', gap: '8px', paddingBottom: '8px', WebkitOverflowScrolling: 'touch' }}>
+            {Array.from({ length: chiti.durationMonths }, (_, i) => i + 1).map(mNum => {
+              const isSelected = displayMonth.monthNumber === mNum;
+              const mData = chitMonths.find(m => m.monthNumber === mNum);
+              let statusColor = '#64748B'; // Default
+              if (mData) {
+                if (mData.status === 'CLOSED') statusColor = '#10B981';
+                else if (mData.status === 'PAYMENT_COLLECTION') statusColor = '#7C3AED';
+              }
+              
+              return (
+                <button
+                  key={mNum}
+                  onClick={() => setSelectedMonthNum(mNum)}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '20px',
+                    border: isSelected ? '2px solid #7C3AED' : '1px solid #E2E8F0',
+                    background: isSelected ? 'rgba(124, 58, 237, 0.08)' : '#FFFFFF',
+                    color: isSelected ? '#7C3AED' : '#475569',
+                    fontWeight: isSelected ? 800 : 600,
+                    fontSize: '13px',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  Month {mNum}
+                  {mData && mData.status === 'CLOSED' && <CheckCircle2 size={12} color="#10B981" />}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Current Device Date & Time */}
+          <div style={{ textAlign: 'center', marginBottom: '16px', fontSize: '13px', color: '#64748B', fontWeight: 600 }}>
+            <Clock size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
+            {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          </div>
+
+          {/* Action Winner Highlight (If Auction Completed for this month) */}
+          {displayMonth.auctionStatus === 'COMPLETED' && (
+            <div className="card" style={{ background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)', color: '#FFFFFF', marginBottom: '16px', border: 'none', position: 'relative', overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', right: '-20px', top: '-20px', opacity: 0.1 }}>
+                <Award size={120} />
+              </div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 800, color: '#D1FAE5' }}>
+                Month {displayMonth.monthNumber} Auction Details
+              </div>
+              <div style={{ fontSize: '24px', fontWeight: 900, marginTop: '4px' }}>
+                Completed
+              </div>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginTop: '16px', background: 'rgba(0,0,0,0.15)', padding: '12px', borderRadius: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#D1FAE5' }}>Gross Discount</div>
+                  <div style={{ fontSize: '15px', fontWeight: 800 }}>{formatINR(displayMonth.grossDiscount || 0)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#D1FAE5' }}>Agent Comm.</div>
+                  <div style={{ fontSize: '15px', fontWeight: 800 }}>{formatINR(displayMonth.agentCommission || 0)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#D1FAE5' }}>Net Payout</div>
+                  <div style={{ fontSize: '15px', fontWeight: 800 }}>{formatINR(displayMonth.netPayout || 0)}</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Collection Header Strip */}
           <div 
             style={{ 
               display: 'grid', 
@@ -598,24 +682,24 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
             <div>
               <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Expected</div>
               <div style={{ fontSize: '16px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }} className="tabular-nums">
-                {formatINR(chiti.expectedMonthlyPool)}
+                {formatINR(displayMonth.expectedCollection)}
               </div>
             </div>
             <div>
               <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Collected</div>
               <div style={{ fontSize: '16px', fontWeight: 800, color: '#10B981', marginTop: '2px' }} className="tabular-nums">
-                {formatINR(currentMonth.actualCollected)}
+                {formatINR(displayMonth.actualCollected)}
               </div>
             </div>
             <div>
               <div style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>Pending</div>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: currentMonth.pendingCollection > 0 ? '#F59E0B' : '#10B981', marginTop: '2px' }} className="tabular-nums">
-                {formatINR(currentMonth.pendingCollection)}
+              <div style={{ fontSize: '16px', fontWeight: 800, color: displayMonth.pendingCollection > 0 ? '#F59E0B' : '#10B981', marginTop: '2px' }} className="tabular-nums">
+                {formatINR(displayMonth.pendingCollection)}
               </div>
             </div>
           </div>
 
-          {/* MOBILE VIEW: Collection Cards with Prominent [ MARK PAID ] */}
+          {/* MOBILE VIEW: Collection Cards with Huge Tick Marks */}
           <div className="mobile-only mobile-card-list">
             {chitMembers.map(m => {
               const payment = paymentsForCurrentMonth.find(p => p.memberId === m.memberId);
@@ -624,7 +708,13 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
               const isPartial = payment?.status === 'PARTIAL';
 
               return (
-                <div key={m.id} className="mobile-item-card">
+                <div key={m.id} className="mobile-item-card" style={{ position: 'relative', overflow: 'hidden' }}>
+                  {isPaid && (
+                    <div style={{ position: 'absolute', right: '-10px', top: '-10px', opacity: 0.1 }}>
+                      <CheckCircle2 size={100} color="#10B981" />
+                    </div>
+                  )}
+
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span 
@@ -632,8 +722,8 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
                           width: '28px', 
                           height: '28px', 
                           borderRadius: '8px', 
-                          background: 'rgba(124, 58, 237, 0.1)', 
-                          color: '#7C3AED', 
+                          background: isPaid ? '#10B981' : 'rgba(124, 58, 237, 0.1)', 
+                          color: isPaid ? '#FFFFFF' : '#7C3AED', 
                           display: 'inline-flex', 
                           alignItems: 'center', 
                           justifyContent: 'center',
@@ -641,7 +731,7 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
                           fontSize: '12px'
                         }}
                       >
-                        #{m.memberNumber}
+                        {isPaid ? <Check size={16} strokeWidth={3} /> : `#${m.memberNumber}`}
                       </span>
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '15px', color: '#0F172A' }}>
@@ -654,7 +744,9 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
                     </div>
 
                     {isPaid ? (
-                      <span className="badge badge-success"><CheckCircle2 size={12} /> Paid</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#10B981', fontWeight: 800, fontSize: '14px' }}>
+                        <CheckCircle2 size={18} /> PAID
+                      </span>
                     ) : isPartial ? (
                       <span className="badge badge-partial"><Clock size={12} /> Partial</span>
                     ) : (
@@ -663,14 +755,14 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
                   </div>
 
                   {payment && (
-                    <div style={{ fontSize: '12px', color: '#64748B', display: 'flex', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: '12px', color: '#64748B', display: 'flex', justifyContent: 'space-between', marginTop: '8px', background: '#F8FAFC', padding: '6px', borderRadius: '6px' }}>
                       <span>Paid: <strong style={{ color: '#065F46' }}>{formatINR(payment.amountPaid)}</strong> via {payment.paymentMethod}</span>
                       <span style={{ fontFamily: 'monospace', fontSize: '11px' }}>{payment.receiptNumber}</span>
                     </div>
                   )}
 
                   {/* Actions */}
-                  <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
                     {!isPaid && (
                       <button
                         onClick={() => setSelectedMemberForPayment(fullMember || null)}
@@ -721,9 +813,12 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
                   const isPartial = payment?.status === 'PARTIAL';
 
                   return (
-                    <tr key={m.id}>
+                    <tr key={m.id} style={{ background: isPaid ? '#F0FDF4' : 'transparent' }}>
                       <td style={{ fontWeight: 800, color: '#7C3AED' }}>#{m.memberNumber}</td>
-                      <td style={{ fontWeight: 700, color: '#0F172A' }}>{m.fullName}</td>
+                      <td style={{ fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {m.fullName}
+                        {isPaid && <CheckCircle2 size={16} color="#10B981" />}
+                      </td>
                       <td className="tabular-nums">{formatINR(chiti.monthlyContribution)}</td>
                       <td style={{ fontWeight: 800, color: '#065F46' }} className="tabular-nums">
                         {payment ? formatINR(payment.amountPaid) : '₹0'}

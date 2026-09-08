@@ -188,73 +188,7 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Quick Agent Utilities Banner */}
-      {onOpenCalculator && (
-        <div 
-          onClick={onOpenCalculator}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onOpenCalculator(); }}
-          style={{
-            background: 'linear-gradient(135deg, rgba(124, 58, 237, 0.08) 0%, rgba(99, 102, 241, 0.05) 100%)',
-            border: '1px solid rgba(124, 58, 237, 0.2)',
-            borderRadius: '16px',
-            padding: '14px 18px',
-            marginBottom: '24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-            gap: '12px'
-          }}
-          className="hover-lift"
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div 
-              style={{
-                width: '40px',
-                height: '40px',
-                borderRadius: '12px',
-                background: 'linear-gradient(135deg, #7C3AED 0%, #6366F1 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#FFFFFF',
-                boxShadow: '0 4px 12px rgba(124, 58, 237, 0.3)',
-                flexShrink: 0
-              }}
-            >
-              <Calculator size={20} strokeWidth={2.2} />
-            </div>
-            <div>
-              <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                Chiti Financial Calculator
-                <span className="badge badge-purple" style={{ fontSize: '10px', padding: '1px 6px' }}>Utility Tool</span>
-              </div>
-              <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                Quick calculations for monthly installments, bidding differences & agent commissions
-              </div>
-            </div>
-          </div>
-          <button 
-            type="button"
-            className="btn btn-secondary btn-sm"
-            style={{ 
-              fontWeight: 700, 
-              color: '#7C3AED', 
-              borderColor: 'rgba(124, 58, 237, 0.3)',
-              background: '#FFFFFF',
-              flexShrink: 0,
-              minHeight: '38px',
-              padding: '8px 14px'
-            }}
-          >
-            <span>Open Calculator</span>
-            <ArrowRight size={14} />
-          </button>
-        </div>
-      )}
+
 
       {/* PWA Mobile Installation Banner */}
       {onOpenInstall && (
@@ -324,15 +258,15 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
         </div>
       )}
 
-      {/* MY CHITIS SECTION */}
+      {/* UPCOMING CHITIS SECTION */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div>
             <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.3px' }}>
-              MY CHITIS
+              UPCOMING CHITIS
             </h2>
             <div style={{ fontSize: '12px', color: '#64748B' }}>
-              {chitis.length > 0 ? `Managing ${chitis.length} real Chiti group(s)` : 'Your registered Chitis will appear here'}
+              {chitis.length > 0 ? `Chitis with payment dates near today` : 'Your registered Chitis will appear here'}
             </div>
           </div>
 
@@ -391,9 +325,33 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
             </button>
           </div>
         ) : (
-          /* REAL CHITIS MOBILE-OPTIMIZED CARDS */
+          /* UPCOMING CHITIS MOBILE-OPTIMIZED CARDS */
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
-            {chitis.map(chiti => {
+            {(() => {
+              const currentDay = new Date().getDate();
+              const upcoming = chitis.filter(c => {
+                let diff = c.paymentDueDay - currentDay;
+                if (diff < 0) diff += 30; // Approx next month
+                return diff >= 0 && diff <= 10;
+              }).sort((a, b) => {
+                let diffA = a.paymentDueDay - currentDay;
+                if (diffA < 0) diffA += 30;
+                let diffB = b.paymentDueDay - currentDay;
+                if (diffB < 0) diffB += 30;
+                return diffA - diffB;
+              });
+
+              if (upcoming.length === 0) {
+                return (
+                  <div className="card" style={{ padding: '24px', textAlign: 'center', color: '#64748B', gridColumn: '1 / -1' }}>
+                    <Calendar size={32} color="#CBD5E1" style={{ margin: '0 auto 12px' }} />
+                    <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: '4px' }}>No Chitis Due Soon</div>
+                    <div>Check the Collect tab to see all your active Chitis.</div>
+                  </div>
+                );
+              }
+
+              return upcoming.map(chiti => {
               const months = chitiMonthsMap[chiti.id] || [];
               const mData = months.find(m => m.monthNumber === chiti.currentMonth) || months[0];
               const progressPercent = Math.min(100, Math.round((chiti.currentMonth / chiti.durationMonths) * 100));
@@ -437,9 +395,12 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
                         </h3>
                       </div>
 
-                      <span className="badge badge-success">
-                        🟢 Ongoing
-                      </span>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: '10px', color: '#64748B', textTransform: 'uppercase', fontWeight: 700 }}>Due Date</div>
+                        <span className="badge badge-pending" style={{ fontSize: '12px', marginTop: '2px' }}>
+                          <Clock size={12} /> {chiti.paymentDueDay}th of month
+                        </span>
+                      </div>
                     </div>
 
                     {/* Key Metrics */}
@@ -505,7 +466,8 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
                   </button>
                 </div>
               );
-            })}
+            });
+            })()}
           </div>
         )}
       </div>
