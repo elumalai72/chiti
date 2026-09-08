@@ -1,26 +1,29 @@
 import { CalculationRule, SurplusStrategy } from '../types';
 
 export interface AuctionCalculationInput {
-  grossMonthlyPool: number; // e.g. 1,23,000
+  baseCollection: number; // e.g. 250,000 (totalMembers * monthlyContribution)
+  loansRecovered: number; // e.g. 125,000
+  interestEarned: number; // e.g. 5,000
   openingCarryForward: number; // e.g. 0 or surplus from previous month
-  winningBid: number; // e.g. 1,10,000
-  totalMembers: number; // e.g. 41
-  monthlyContribution: number; // e.g. 3,000
+  winningBids: number[]; // e.g. [120000, 150000] (Net payouts to winners)
+  totalMembers: number; // e.g. 50
+  monthlyContribution: number; // e.g. 5,000
   rule: CalculationRule;
 }
 
 export interface AuctionCalculationResult {
-  effectivePool: number; // grossMonthlyPool + openingCarryForward
-  winningBid: number; // Net cash paid to the auction winner (e.g. 1,10,000)
-  grossDiscount: number; // effectivePool - winningBid (e.g. 13,000)
+  effectivePool: number; 
+  totalWinningBids: number; // Total Net cash paid to the auction winners
+  grossDiscount: number; // effectivePool - totalWinningBids
   agentCommission: number; // e.g. 5,000
-  netPayout: number; // winningBid
-  surplusAmount: number; // grossDiscount - agentCommission (e.g. 8,000)
+  netPayout: number; // same as totalWinningBids
+  surplusAmount: number; // grossDiscount - agentCommission
   surplusStrategy: SurplusStrategy;
-  perMemberDividend: number; // e.g. Math.floor(8000 / 41) = 195
-  totalDividendDistributed: number; // 195 * 41 = 7,995
-  closingCarryForward: number; // Remainder (5) or full surplus depending on strategy
-  nextMonthMemberDue: number; // 3000 - 195 = 2,805 (if dividend deduction)
+  perMemberDividend: number; 
+  totalDividendDistributed: number; 
+  closingCarryForward: number; 
+  nextMonthMemberDue: number; 
+  lentOutAmount: number; // amount sent to lending pool
   formulaDescription: string;
 }
 
@@ -70,14 +73,14 @@ export function calculateCommission(
  *    - SECOND_AUCTION_RESERVE: Reserved for secondary micro-draw/lending pot
  */
 export function calculateAuctionOutcome(input: AuctionCalculationInput): AuctionCalculationResult {
-  const effectivePool = input.grossMonthlyPool + input.openingCarryForward;
-  const winningBid = input.winningBid;
+  const effectivePool = input.baseCollection + input.loansRecovered + input.interestEarned + input.openingCarryForward;
+  const totalWinningBids = input.winningBids.reduce((sum, bid) => sum + bid, 0);
   
-  if (winningBid > effectivePool) {
-    throw new Error(`Winning bid (₹${winningBid}) cannot exceed total available pool (₹${effectivePool})`);
+  if (totalWinningBids > effectivePool) {
+    throw new Error(`Total winning bids (₹${totalWinningBids}) cannot exceed total available pool (₹${effectivePool})`);
   }
 
-  const grossDiscount = effectivePool - winningBid;
+  const grossDiscount = effectivePool - totalWinningBids;
   const agentCommission = calculateCommission(effectivePool, grossDiscount, input.rule);
   const surplusAmount = Math.max(0, grossDiscount - agentCommission);
 
@@ -85,6 +88,7 @@ export function calculateAuctionOutcome(input: AuctionCalculationInput): Auction
   let totalDividendDistributed = 0;
   let closingCarryForward = 0;
   let nextMonthMemberDue = input.monthlyContribution;
+  let lentOutAmount = 0;
 
   switch (input.rule.surplusStrategy) {
     case 'DIVIDEND_DEDUCTION': {
@@ -116,25 +120,34 @@ export function calculateAuctionOutcome(input: AuctionCalculationInput): Auction
       nextMonthMemberDue = input.monthlyContribution;
       break;
     }
+    case 'LENDING_POOL': {
+      perMemberDividend = 0;
+      totalDividendDistributed = 0;
+      closingCarryForward = 0;
+      lentOutAmount = surplusAmount;
+      nextMonthMemberDue = input.monthlyContribution;
+      break;
+    }
   }
 
   const formulaDescription = 
-    `Pool: ₹${effectivePool.toLocaleString('en-IN')} | Winning Bid: ₹${winningBid.toLocaleString('en-IN')} | ` +
+    `Pool: ₹${effectivePool.toLocaleString('en-IN')} | Bids: ₹${totalWinningBids.toLocaleString('en-IN')} | ` +
     `Discount: ₹${grossDiscount.toLocaleString('en-IN')} | Commission: ₹${agentCommission.toLocaleString('en-IN')} | ` +
     `Surplus: ₹${surplusAmount.toLocaleString('en-IN')} (Strategy: ${input.rule.surplusStrategy})`;
 
   return {
     effectivePool,
-    winningBid,
+    totalWinningBids,
     grossDiscount,
     agentCommission,
-    netPayout: winningBid,
+    netPayout: totalWinningBids,
     surplusAmount,
     surplusStrategy: input.rule.surplusStrategy,
     perMemberDividend,
     totalDividendDistributed,
     closingCarryForward,
     nextMonthMemberDue,
+    lentOutAmount,
     formulaDescription
   };
 }
@@ -147,17 +160,21 @@ export function calculateAuctionOutcome(input: AuctionCalculationInput): Auction
  */
 export function reconcileMonthlyFinancials(params: {
   actualCollected: number;
+  loansRecovered: number;
+  interestEarned: number;
   openingCarryForward: number;
   netPayout: number;
   agentCommission: number;
   totalDividendDistributed: number;
+  lentOutAmount: number;
   closingCarryForward: number;
 }): { isBalanced: boolean; totalInflows: number; totalOutflows: number; variance: number } {
-  const totalInflows = params.actualCollected + params.openingCarryForward;
+  const totalInflows = params.actualCollected + params.loansRecovered + params.interestEarned + params.openingCarryForward;
   const totalOutflows = 
     params.netPayout + 
     params.agentCommission + 
     params.totalDividendDistributed + 
+    params.lentOutAmount + 
     params.closingCarryForward;
   
   const variance = Math.abs(totalInflows - totalOutflows);

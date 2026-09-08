@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { storage } from './services/storageService';
+import React, { useState, useEffect } from 'react';
+import { dbService } from './services/dbService';
 import { AuthView } from './components/AuthView';
 import { Navbar } from './components/Navbar';
 import { BottomNav } from './components/BottomNav';
@@ -10,7 +10,10 @@ import { ChitiLogo } from './components/ChitiLogo';
 import { SplashScreen } from './components/SplashScreen';
 import { ChitiCalculator } from './components/ChitiCalculator';
 import { CalculatorModal } from './components/CalculatorModal';
+import { FloatingActionMenu } from './components/FloatingActionMenu';
+import { NotepadModal } from './components/NotepadModal';
 import { usePWAInstall, InstallPwaModal } from './components/InstallPwaPrompt';
+import { AgentAccount, Chiti, Member, LedgerEntry } from './types';
 import { 
   Home, 
   Layers, 
@@ -25,14 +28,60 @@ import {
 
 export const App: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
-  const [currentAgent, setCurrentAgent] = useState(storage.getCurrentAgent());
+  const [currentAgent, setCurrentAgent] = useState<AgentAccount | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  
+  // App data state
+  const [chitis, setChitis] = useState<Chiti[]>([]);
+  const [allMembers, setAllMembers] = useState<Member[]>([]);
+  const [allLedger, setAllLedger] = useState<LedgerEntry[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
   const [activeTab, setActiveTab] = useState<string>('home');
   const [selectedChitiId, setSelectedChitiId] = useState<string | null>(null);
   const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
+  const [isNotepadOpen, setIsNotepadOpen] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
-  const [, setRerender] = useState(0);
 
   const { isInstalled, isIOS, triggerInstall } = usePWAInstall();
+
+  // Load Auth State on Mount
+  useEffect(() => {
+    async function initAuth() {
+      try {
+        const agent = await dbService.getCurrentAgent();
+        setCurrentAgent(agent);
+      } catch (err) {
+        console.error('Failed to load agent', err);
+      } finally {
+        setIsLoadingAuth(false);
+      }
+    }
+    initAuth();
+  }, []);
+
+  // Load Agent Data when logged in
+  useEffect(() => {
+    async function loadData() {
+      if (!currentAgent) return;
+      setIsLoadingData(true);
+      try {
+        const [cData, mData, lData] = await Promise.all([
+          dbService.getChitisByAgent(currentAgent.id),
+          dbService.getMembersByAgent(currentAgent.id),
+          dbService.getLedgerByAgent(currentAgent.id)
+        ]);
+        setChitis(cData);
+        setAllMembers(mData);
+        setAllLedger(lData);
+      } catch (err) {
+        console.error('Failed to load dashboard data', err);
+      } finally {
+        setIsLoadingData(false);
+      }
+    }
+    loadData();
+  }, [currentAgent]);
 
   const handleOpenInstall = () => {
     if (isIOS) {
@@ -49,7 +98,7 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = () => {
-    storage.logoutAgent();
+    dbService.logoutAgent();
     setCurrentAgent(null);
     setSelectedChitiId(null);
   };
@@ -59,7 +108,7 @@ export const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  if (showSplash) {
+  if (showSplash || isLoadingAuth) {
     return <SplashScreen onFinish={() => setShowSplash(false)} minDuration={1000} />;
   }
 
@@ -68,9 +117,14 @@ export const App: React.FC = () => {
     return <AuthView onAuthenticated={handleAuthenticated} />;
   }
 
-  const chitis = storage.getChitisByAgent(currentAgent.id);
-  const allMembers = storage.getMembersByAgent(currentAgent.id);
-  const allLedger = storage.getLedgerByAgent(currentAgent.id);
+  // Optionally show a loading screen while data fetches
+  if (isLoadingData && chitis.length === 0) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0F172A' }}>
+        <ChitiLogo size={60} />
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -285,6 +339,18 @@ export const App: React.FC = () => {
         <CalculatorModal 
           isOpen={isCalculatorOpen} 
           onClose={() => setIsCalculatorOpen(false)} 
+        />
+
+        {/* Floating Action Menu */}
+        <FloatingActionMenu 
+          onOpenCalculator={() => setIsCalculatorOpen(true)}
+          onOpenNotepad={() => setIsNotepadOpen(true)}
+        />
+
+        {/* Notepad Modal */}
+        <NotepadModal
+          isOpen={isNotepadOpen}
+          onClose={() => setIsNotepadOpen(false)}
         />
 
         {/* Global PWA Install Modal (iOS Instructions & Native Helper) */}

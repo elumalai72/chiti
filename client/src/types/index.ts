@@ -30,7 +30,8 @@ export type SurplusStrategy =
   | 'DIVIDEND_DEDUCTION'     // Deducted as credit from next month's payment
   | 'POOL_CARRY_FORWARD'      // Added to next month's auction pool
   | 'CASH_DIVIDEND'          // Directly paid back to members in cash
-  | 'SECOND_AUCTION_RESERVE'; // Used for secondary micro-auction/reserve
+  | 'SECOND_AUCTION_RESERVE' // Used for secondary micro-auction/reserve
+  | 'LENDING_POOL';          // Surplus is lent out to members with interest
 
 export interface CalculationRule {
   id: string;
@@ -101,15 +102,16 @@ export interface ChitMonth {
   actualCollected: number;
   pendingCollection: number;
   auctionStatus: 'SCHEDULED' | 'BIDDING_OPEN' | 'COMPLETED';
-  winningBid?: number;
-  winnerMemberId?: string;
-  winnerMemberName?: string;
-  winnerMemberNumber?: number;
+  // Replaced single winner fields with aggregate totals:
   grossDiscount?: number;
   agentCommission?: number;
   surplusAmount?: number;
   memberDividendCredit?: number; // per member rebate for next month
   netPayout?: number;
+  // Lending fields:
+  loansRecovered: number;
+  interestEarned: number;
+  lentOutAmount: number;
   closingCarryForward: number;
   status: ChitMonthStatus;
 }
@@ -223,4 +225,30 @@ export interface AuditLog {
   target: string;
   timestamp: string;
   details: string;
+}
+
+export interface Loan {
+  id: string;
+  agentId: string;
+  chitiId: string;
+  issuedMonthId: string;
+  memberId: string;
+  memberName: string;
+  principalAmount: number;
+  expectedInterest: number;
+  repaidAmount: number;
+  repaidInterest: number;
+  status: 'ACTIVE' | 'REPAID' | 'DEFAULTED';
+  issuedDate: string;
+  notes?: string;
+}
+
+export interface LoanRepayment {
+  id: string;
+  agentId: string;
+  loanId: string;
+  repaymentMonthId: string;
+  principalRepaid: number;
+  interestRepaid: number;
+  date: string;
 }

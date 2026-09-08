@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { storage } from '../services/storageService';
+import React, { useState, useEffect } from 'react';
+import { dbService } from '../services/dbService';
 import { formatINR } from '../engine/calculationEngine';
-import { AgentAccount } from '../types';
+import { AgentAccount, Chiti, Member, ChitMonth } from '../types';
 import { NewChitiWizard } from './NewChitiWizard';
 import { ChitiLogo } from './ChitiLogo';
 import { 
@@ -35,8 +35,37 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
   const [isNewChitiOpen, setIsNewChitiOpen] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
 
-  const chitis = storage.getChitisByAgent(agent.id);
-  const allMembers = storage.getMembersByAgent(agent.id);
+  const [chitis, setChitis] = useState<Chiti[]>([]);
+  const [allMembers, setAllMembers] = useState<Member[]>([]);
+  const [chitiMonthsMap, setChitiMonthsMap] = useState<Record<string, ChitMonth[]>>({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadDashboard() {
+      setIsLoading(true);
+      try {
+        const [loadedChitis, loadedMembers] = await Promise.all([
+          dbService.getChitisByAgent(agent.id),
+          dbService.getMembersByAgent(agent.id)
+        ]);
+        
+        const monthsMap: Record<string, ChitMonth[]> = {};
+        for (const c of loadedChitis) {
+          const months = await dbService.getChitMonths(c.id);
+          monthsMap[c.id] = months;
+        }
+
+        setChitis(loadedChitis);
+        setAllMembers(loadedMembers);
+        setChitiMonthsMap(monthsMap);
+      } catch (err) {
+        console.error('Failed to load dashboard', err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadDashboard();
+  }, [agent.id, dataVersion]);
 
   const totalMonthlyExpected = chitis.reduce((acc, c) => acc + c.expectedMonthlyPool, 0);
   const totalMembersCount = chitis.reduce((acc, c) => acc + c.totalMembers, 0);
@@ -46,7 +75,7 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
   let totalCurrentPending = 0;
 
   chitis.forEach(c => {
-    const months = storage.getChitMonths(c.id);
+    const months = chitiMonthsMap[c.id] || [];
     const curM = months.find(m => m.monthNumber === c.currentMonth);
     if (curM) {
       totalCurrentCollected += curM.actualCollected;
@@ -54,17 +83,27 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
     }
   });
 
-  const handleCreated = (newChitiData: any) => {
+  const handleCreated = async (newChitiData: any) => {
     try {
-      const created = storage.createChiti(newChitiData);
       setIsNewChitiOpen(false);
+      setIsLoading(true);
+      const created = await dbService.createChiti(newChitiData);
       setDataVersion(v => v + 1);
       // Automatically open the newly created Chiti dashboard
       onOpenChiti(created.id);
     } catch (e: any) {
       alert(e.message);
+      setIsLoading(false);
     }
   };
+
+  if (isLoading && chitis.length === 0) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
+        <div className="spinner" style={{ width: '40px', height: '40px', border: '3px solid rgba(124, 58, 237, 0.2)', borderTopColor: '#7C3AED', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '16px 16px 40px', width: '100%' }}>
@@ -355,7 +394,7 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
           /* REAL CHITIS MOBILE-OPTIMIZED CARDS */
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
             {chitis.map(chiti => {
-              const months = storage.getChitMonths(chiti.id);
+              const months = chitiMonthsMap[chiti.id] || [];
               const mData = months.find(m => m.monthNumber === chiti.currentMonth) || months[0];
               const progressPercent = Math.min(100, Math.round((chiti.currentMonth / chiti.durationMonths) * 100));
 

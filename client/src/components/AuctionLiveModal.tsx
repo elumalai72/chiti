@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Chiti, ChitMember, ChitMonth, Payout } from '../types';
 import { calculateAuctionOutcome, formatINR } from '../engine/calculationEngine';
-import { X, Gavel, Award, Sparkles, CheckCircle2, AlertCircle, ArrowDown } from 'lucide-react';
+import { X, Gavel, Award, Sparkles, AlertCircle, Plus, Trash2 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 interface AuctionLiveModalProps {
@@ -11,9 +11,11 @@ interface AuctionLiveModalProps {
   eligibleMembers: ChitMember[];
   onClose: () => void;
   onConfirmPayout: (params: {
-    winnerMemberId: string;
-    winningBid: number;
-    payoutMethod: Payout['payoutMethod'];
+    winners: Array<{
+      winnerMemberId: string;
+      winningBid: number;
+      payoutMethod: Payout['payoutMethod'];
+    }>;
     notes?: string;
   }) => void;
 }
@@ -27,15 +29,24 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
   onConfirmPayout
 }) => {
   const monthNumberVal = month?.monthNumber ?? monthNumber ?? chiti.currentMonth;
-  const openingCarryForward = month?.openingCarryForward ?? 0;
-  const pool = chiti.expectedMonthlyPool + openingCarryForward;
+  
+  const baseCollection = chiti.expectedMonthlyPool;
+  const loansRecovered = month?.loansRecovered || 0;
+  const interestEarned = month?.interestEarned || 0;
+  const openingCarryForward = month?.openingCarryForward || 0;
+  
+  const pool = baseCollection + loansRecovered + interestEarned + openingCarryForward;
 
-  // Pre-select first eligible member or default
-  const [selectedMemberId, setSelectedMemberId] = useState<string>(
-    eligibleMembers[0]?.memberId || ''
-  );
-  const [bidAmount, setBidAmount] = useState<number>(Math.round(pool * 0.88));
-  const [payoutMethod, setPayoutMethod] = useState<Payout['payoutMethod']>('UPI');
+  const [winners, setWinners] = useState<Array<{
+    winnerMemberId: string;
+    winningBid: number;
+    payoutMethod: Payout['payoutMethod'];
+  }>>([{
+    winnerMemberId: eligibleMembers[0]?.memberId || '',
+    winningBid: Math.round(pool * 0.88),
+    payoutMethod: 'UPI'
+  }]);
+  
   const [notes, setNotes] = useState<string>(`Won at Month ${monthNumberVal} reverse auction`);
 
   // Run calculation dynamically
@@ -43,28 +54,57 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
   let calculationError = '';
 
   try {
-    if (bidAmount > 0 && bidAmount <= pool) {
+    const bids = winners.map(w => w.winningBid);
+    const totalBids = bids.reduce((a, b) => a + b, 0);
+    
+    if (bids.some(b => b <= 0)) {
+       calculationError = 'All bids must be greater than 0';
+    } else if (totalBids > pool) {
+       calculationError = `Total winning bids (${formatINR(totalBids)}) cannot exceed total pool (${formatINR(pool)})`;
+    } else {
       calculation = calculateAuctionOutcome({
-        grossMonthlyPool: chiti.expectedMonthlyPool,
+        baseCollection,
+        loansRecovered,
+        interestEarned,
         openingCarryForward,
-        winningBid: bidAmount,
+        winningBids: bids,
         totalMembers: chiti.totalMembers,
         monthlyContribution: chiti.monthlyContribution,
         rule: chiti.rule
       });
-    } else {
-      calculationError = `Bid amount must be between ₹1 and total pool (${formatINR(pool)})`;
     }
   } catch (err: any) {
     calculationError = err.message;
   }
 
-  const selectedMember = eligibleMembers.find(m => m.memberId === selectedMemberId);
+  const handleAddWinner = () => {
+    setWinners([...winners, {
+      winnerMemberId: eligibleMembers[0]?.memberId || '',
+      winningBid: Math.round(pool * 0.5), // Arbitrary starting point for 2nd winner
+      payoutMethod: 'UPI'
+    }]);
+  };
+
+  const handleRemoveWinner = (index: number) => {
+    if (winners.length > 1) {
+      setWinners(winners.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateWinner = (index: number, field: string, value: any) => {
+    const newWinners = [...winners];
+    newWinners[index] = { ...newWinners[index], [field]: value };
+    setWinners(newWinners);
+  };
 
   const handleConfirm = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedMemberId) {
-      alert('Please select the winning member');
+    if (winners.some(w => !w.winnerMemberId)) {
+      alert('Please select a member for all winning bids');
+      return;
+    }
+    if (new Set(winners.map(w => w.winnerMemberId)).size !== winners.length) {
+      alert('A member can only be selected once per auction');
       return;
     }
     if (!calculation) {
@@ -82,19 +122,17 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
     } catch {}
 
     onConfirmPayout({
-      winnerMemberId: selectedMemberId,
-      winningBid: bidAmount,
-      payoutMethod,
+      winners,
       notes
     });
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={onClose} style={{ zIndex: 1000, overflowY: 'auto', padding: '20px 0' }}>
       <div 
         className="modal-sheet" 
         onClick={e => e.stopPropagation()}
-        style={{ maxWidth: '640px' }}
+        style={{ maxWidth: '640px', margin: '0 auto', height: 'auto', overflow: 'visible' }}
       >
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -132,7 +170,7 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
           </button>
         </div>
 
-        {/* Pool Summary Strip */}
+        {/* Dynamic Pool Summary Strip */}
         <div 
           style={{
             background: 'linear-gradient(135deg, #0D1322 0%, #070B14 100%)',
@@ -141,82 +179,133 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
             color: '#FFFFFF',
             marginBottom: '16px',
             display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
+            flexDirection: 'column',
             gap: '8px'
           }}
         >
-          <div>
-            <div style={{ fontSize: '11px', color: '#94A3B8' }}>Available Monthly Collection Pool</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: '#FFFFFF', marginTop: '2px' }} className="tabular-nums">
-              {formatINR(pool)}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: '11px', color: '#94A3B8' }}>Dynamic Monthly Collection Pool</div>
+              <div style={{ fontSize: '24px', fontWeight: 800, color: '#FFFFFF', marginTop: '2px' }} className="tabular-nums">
+                {formatINR(pool)}
+              </div>
             </div>
-            <div style={{ fontSize: '11px', color: '#CBD5E1', marginTop: '2px' }}>
-              {chiti.totalMembers} Members × {formatINR(chiti.monthlyContribution)}
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '11px', color: '#94A3B8' }}>Rule Type</div>
+              <span className="badge badge-violet" style={{ marginTop: '4px' }}>
+                {chiti.rule.surplusStrategy === 'LENDING_POOL' ? 'Lending Chiti' : 'Reverse Bid'}
+              </span>
             </div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '11px', color: '#94A3B8' }}>Rule Type</div>
-            <span className="badge badge-violet" style={{ marginTop: '4px' }}>
-              Reverse (Lowest Bid Wins)
-            </span>
+          
+          <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: '#CBD5E1', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '8px' }}>
+             <span>Base: <strong>{formatINR(baseCollection)}</strong></span>
+             {loansRecovered > 0 && <span>Recovered: <strong>{formatINR(loansRecovered)}</strong></span>}
+             {interestEarned > 0 && <span>Interest: <strong>{formatINR(interestEarned)}</strong></span>}
           </div>
         </div>
 
         <form onSubmit={handleConfirm} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {/* Winner Selection */}
-          <div>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-              Select Winning Member ({eligibleMembers.length} eligible) *
-            </label>
-            <select
-              value={selectedMemberId}
-              onChange={e => setSelectedMemberId(e.target.value)}
-              style={{ fontWeight: 600 }}
-              required
-            >
-              <option value="">-- Choose Member --</option>
-              {eligibleMembers.map(m => (
-                <option key={m.memberId} value={m.memberId}>
-                  #{m.memberNumber} - {m.fullName} {m.phone ? `(${m.phone})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          
+          {/* Winners List */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+               <h4 style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', margin: 0 }}>Auction Winners</h4>
+               {chiti.rule.surplusStrategy === 'LENDING_POOL' && (
+                 <button 
+                   type="button" 
+                   onClick={handleAddWinner}
+                   className="btn btn-secondary btn-sm"
+                   style={{ padding: '4px 8px', fontSize: '11px', height: 'auto', minHeight: 'auto' }}
+                 >
+                   <Plus size={14} /> Add Another Winner
+                 </button>
+               )}
+            </div>
 
-          {/* Winning Bid Input */}
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-              <label style={{ fontSize: '13px', fontWeight: 700, color: '#334155' }}>
-                Winning Bid Amount (₹) *
-              </label>
-              <span style={{ fontSize: '12px', color: '#64748B' }}>
-                Lowest bid wins payout
-              </span>
-            </div>
-            <div style={{ position: 'relative' }}>
-              <span style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', fontWeight: 800, color: '#64748B', fontSize: '18px' }}>
-                ₹
-              </span>
-              <input 
-                type="number"
-                inputMode="numeric"
-                value={bidAmount || ''}
-                onChange={e => setBidAmount(Number(e.target.value))}
-                step={500}
-                min={1000}
-                max={pool}
-                style={{
-                  paddingLeft: '38px',
-                  fontSize: '20px',
-                  fontWeight: 800,
-                  color: '#0F172A',
-                  border: '2px solid #7C3AED'
-                }}
-                required
-              />
-            </div>
+            {winners.map((winner, idx) => (
+              <div key={idx} style={{ background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '12px', borderRadius: '12px', position: 'relative' }}>
+                
+                {winners.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveWinner(idx)}
+                    style={{ position: 'absolute', top: '8px', right: '8px', background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer' }}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {/* Winner Selection */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                      Select Winner {idx + 1} *
+                    </label>
+                    <select
+                      value={winner.winnerMemberId}
+                      onChange={e => updateWinner(idx, 'winnerMemberId', e.target.value)}
+                      style={{ fontWeight: 600, padding: '8px', fontSize: '14px' }}
+                      required
+                    >
+                      <option value="">-- Choose Member --</option>
+                      {eligibleMembers.map(m => (
+                        <option key={m.memberId} value={m.memberId}>
+                          #{m.memberNumber} - {m.fullName} {m.phone ? `(${m.phone})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Winning Bid Input */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px', display: 'block' }}>
+                        Winning Bid (₹) *
+                      </label>
+                      <div style={{ position: 'relative' }}>
+                        <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', fontWeight: 800, color: '#64748B' }}>
+                          ₹
+                        </span>
+                        <input 
+                          type="number"
+                          inputMode="numeric"
+                          value={winner.winningBid || ''}
+                          onChange={e => updateWinner(idx, 'winningBid', Number(e.target.value))}
+                          step={500}
+                          min={1000}
+                          max={pool}
+                          style={{
+                            paddingLeft: '30px',
+                            fontSize: '16px',
+                            fontWeight: 800,
+                            color: '#0F172A',
+                            border: '2px solid #7C3AED',
+                            padding: '8px'
+                          }}
+                          required
+                        />
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '4px' }}>
+                        Payout Method
+                      </label>
+                      <select
+                        value={winner.payoutMethod}
+                        onChange={e => updateWinner(idx, 'payoutMethod', e.target.value)}
+                        style={{ fontWeight: 600, padding: '8px', fontSize: '14px' }}
+                      >
+                        <option value="UPI">UPI</option>
+                        <option value="CASH">CASH</option>
+                        <option value="BANK_TRANSFER">BANK TRANSFER</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Dynamic Calculation Engine Output */}
@@ -238,14 +327,14 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', fontSize: '12px' }}>
                 <div style={{ background: '#FFFFFF', padding: '10px', borderRadius: '10px', border: '1px solid #F3E8FF' }}>
-                  <div style={{ color: '#64748B', fontSize: '11px' }}>Winner Net Payout</div>
+                  <div style={{ color: '#64748B', fontSize: '11px' }}>Total Winners Payout</div>
                   <div style={{ fontWeight: 800, color: '#10B981', fontSize: '16px', marginTop: '2px' }} className="tabular-nums">
                     {formatINR(calculation.netPayout)}
                   </div>
                 </div>
 
                 <div style={{ background: '#FFFFFF', padding: '10px', borderRadius: '10px', border: '1px solid #F3E8FF' }}>
-                  <div style={{ color: '#64748B', fontSize: '11px' }}>Auction Discount</div>
+                  <div style={{ color: '#64748B', fontSize: '11px' }}>Total Auction Discount</div>
                   <div style={{ fontWeight: 800, color: '#7C3AED', fontSize: '16px', marginTop: '2px' }} className="tabular-nums">
                     {formatINR(calculation.grossDiscount)}
                   </div>
@@ -283,6 +372,10 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
                   <div style={{ color: '#059669' }}>
                     ✓ <strong>{formatINR(calculation.perMemberDividend)} rebate</strong> credited per member off Month {monthNumberVal + 1} dues (New Due: {formatINR(calculation.nextMonthMemberDue)}). Remainder {formatINR(calculation.closingCarryForward)} carried forward.
                   </div>
+                ) : chiti.rule.surplusStrategy === 'LENDING_POOL' ? (
+                  <div style={{ color: '#7C3AED' }}>
+                    ✓ Lending Surplus of <strong>{formatINR(calculation.lentOutAmount)}</strong> is available to be issued as loans to members.
+                  </div>
                 ) : (
                   <div style={{ color: '#3B82F6' }}>
                     ✓ Surplus {formatINR(calculation.surplusAmount)} will be carried forward to Month {monthNumberVal + 1} pool.
@@ -299,32 +392,6 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
             </div>
           )}
 
-          {/* Payout Settlement Mode */}
-          <div>
-            <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-              Payout Settlement Method
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-              {(['UPI', 'CASH', 'BANK_TRANSFER'] as const).map(m => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setPayoutMethod(m)}
-                  className="btn btn-secondary btn-sm"
-                  style={{
-                    border: payoutMethod === m ? '2px solid #7C3AED' : '1px solid #CBD5E1',
-                    background: payoutMethod === m ? 'rgba(124, 58, 237, 0.08)' : '#FFFFFF',
-                    color: payoutMethod === m ? '#7C3AED' : '#475569',
-                    fontWeight: 700,
-                    minHeight: '40px'
-                  }}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          </div>
-
           {/* Confirm Payout CTA */}
           <button 
             type="submit" 
@@ -332,7 +399,7 @@ export const AuctionLiveModal: React.FC<AuctionLiveModalProps> = ({
             style={{ minHeight: '50px', fontSize: '15px', marginTop: '6px' }}
             disabled={!calculation}
           >
-            <Award size={18} /> Award Auction & Settle Payout
+            <Award size={18} /> Confirm {winners.length > 1 ? 'Winners' : 'Winner'} & Settle Payout
           </button>
         </form>
       </div>

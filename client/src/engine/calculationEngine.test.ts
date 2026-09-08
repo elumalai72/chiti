@@ -31,16 +31,18 @@ describe('Chiti Calculation Engine - Financial Correctness', () => {
     };
 
     const outcome = calculateAuctionOutcome({
-      grossMonthlyPool: 123000,
+      baseCollection: 123000,
+      loansRecovered: 0,
+      interestEarned: 0,
       openingCarryForward: 0,
-      winningBid: 110000,
+      winningBids: [110000],
       totalMembers: 41,
       monthlyContribution: 3000,
       rule
     });
 
     expect(outcome.effectivePool).toBe(123000);
-    expect(outcome.winningBid).toBe(110000);
+    expect(outcome.totalWinningBids).toBe(110000);
     expect(outcome.grossDiscount).toBe(13000); // 1,23,000 - 1,10,000
     expect(outcome.agentCommission).toBe(5000);
     expect(outcome.surplusAmount).toBe(8000); // 13,000 - 5,000
@@ -55,10 +57,13 @@ describe('Chiti Calculation Engine - Financial Correctness', () => {
 
     const reconciliation = reconcileMonthlyFinancials({
       actualCollected: 123000,
+      loansRecovered: 0,
+      interestEarned: 0,
       openingCarryForward: 0,
       netPayout: outcome.netPayout,
       agentCommission: outcome.agentCommission,
       totalDividendDistributed: outcome.totalDividendDistributed,
+      lentOutAmount: outcome.lentOutAmount,
       closingCarryForward: outcome.closingCarryForward
     });
 
@@ -79,9 +84,11 @@ describe('Chiti Calculation Engine - Financial Correctness', () => {
     };
 
     const outcome = calculateAuctionOutcome({
-      grossMonthlyPool: 123000,
+      baseCollection: 123000,
+      loansRecovered: 0,
+      interestEarned: 0,
       openingCarryForward: 0,
-      winningBid: 110000,
+      winningBids: [110000],
       totalMembers: 41,
       monthlyContribution: 3000,
       rule
@@ -94,9 +101,11 @@ describe('Chiti Calculation Engine - Financial Correctness', () => {
 
     // Next month with carry forward of 8,000
     const nextMonthOutcome = calculateAuctionOutcome({
-      grossMonthlyPool: 123000,
+      baseCollection: 123000,
+      loansRecovered: 0,
+      interestEarned: 0,
       openingCarryForward: outcome.closingCarryForward, // 8,000
-      winningBid: 115000,
+      winningBids: [115000],
       totalMembers: 41,
       monthlyContribution: 3000,
       rule
@@ -119,9 +128,11 @@ describe('Chiti Calculation Engine - Financial Correctness', () => {
     };
 
     const outcome = calculateAuctionOutcome({
-      grossMonthlyPool: 123000,
+      baseCollection: 123000,
+      loansRecovered: 0,
+      interestEarned: 0,
       openingCarryForward: 0,
-      winningBid: 110000,
+      winningBids: [110000],
       totalMembers: 41,
       monthlyContribution: 3000,
       rule: percentPoolRule
