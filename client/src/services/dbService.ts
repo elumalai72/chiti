@@ -11,7 +11,9 @@ import {
   Receipt, 
   AuditLog, 
   CalculationRule,
-  PaymentMethod
+  PaymentMethod,
+  Loan,
+  LoanRepayment
 } from '../types';
 import { 
   calculateExpectedMonthlyPool, 
@@ -627,6 +629,30 @@ class DbService {
     return payouts;
   }
 
+  public async getLoansByChiti(chitiId: string): Promise<Loan[]> {
+    const { data, error } = await supabase.from('loans').select('*').eq('chiti_id', chitiId).order('issued_date', { ascending: false });
+    if (error) throw error;
+    return data.map(this.mapLoan);
+  }
+
+  public async updateLoan(loanId: string, updates: any) {
+    const dbUpdates: any = {};
+    if (updates.principalAmount !== undefined) dbUpdates.principal_amount = updates.principalAmount;
+    if (updates.expectedInterest !== undefined) dbUpdates.expected_interest = updates.expectedInterest;
+    if (updates.memberName !== undefined) dbUpdates.member_name = updates.memberName;
+    if (updates.issuedDate !== undefined) dbUpdates.issued_date = updates.issuedDate;
+    if (updates.notes !== undefined) dbUpdates.notes = updates.notes;
+    
+    const { error } = await supabase.from('loans').update(dbUpdates).eq('id', loanId);
+    if (error) throw error;
+  }
+
+  public async getLoanRepayments(loanId: string): Promise<LoanRepayment[]> {
+    const { data, error } = await supabase.from('loan_repayments').select('*').eq('loan_id', loanId).order('date', { ascending: true });
+    if (error) throw error;
+    return data.map(this.mapLoanRepayment);
+  }
+
   public async issueLoan(params: {
     agentId: string;
     chitiId: string;
@@ -732,6 +758,8 @@ class DbService {
   private mapPayment(row: any): Payment { return { id: row.id, agentId: row.agent_id, chitiId: row.chiti_id, chitMonthId: row.chit_month_id, monthNumber: row.month_number, memberId: row.member_id, memberName: row.member_name, memberNumber: row.member_number, amountDue: Number(row.amount_due), amountPaid: Number(row.amount_paid), paymentMethod: row.payment_method, status: row.status, receiptNumber: row.receipt_number, notes: row.notes }; }
   private mapLedger(row: any): LedgerEntry { return { id: row.id, agentId: row.agent_id, chitiId: row.chiti_id, monthNumber: row.month_number, memberId: row.member_id, memberName: row.member_name, type: row.type, amount: Number(row.amount), flow: row.flow, runningBalance: Number(row.running_balance), date: row.date, referenceId: row.reference_id, isReversal: row.is_reversal, reversalOfId: row.reversal_of_id, notes: row.notes }; }
   private mapReceipt(row: any): Receipt { return { id: row.id, receiptNumber: row.receipt_number, agentName: row.agent_name, businessName: row.business_name, agentPhone: row.agent_phone, chitiName: row.chiti_name, chitiCode: row.chiti_code, memberName: row.member_name, memberNumber: row.member_number, monthNumber: row.month_number, amountDue: Number(row.amount_due), amountPaid: Number(row.amount_paid), remainingDue: Number(row.remaining_due), paymentMethod: row.payment_method, date: row.date, transactionId: row.transaction_id }; }
+  private mapLoan(row: any): Loan { return { id: row.id, agentId: row.agent_id, chitiId: row.chiti_id, issuedMonthId: row.issued_month_id, memberId: row.member_id, memberName: row.member_name, principalAmount: Number(row.principal_amount), expectedInterest: Number(row.expected_interest), repaidAmount: Number(row.repaid_amount), repaidInterest: Number(row.repaid_interest), status: row.status, issuedDate: row.issued_date, notes: row.notes }; }
+  private mapLoanRepayment(row: any): LoanRepayment { return { id: row.id, agentId: row.agent_id, loanId: row.loan_id, repaymentMonthId: row.repayment_month_id, principalRepaid: Number(row.principal_repaid), interestRepaid: Number(row.interest_repaid), date: row.date }; }
 
   private async logAudit(params: { agentId: string; actorName: string; action: string; target: string; details: string }) {
     await supabase.from('audit_logs').insert({ agent_id: params.agentId, actor_name: params.actorName, action: params.action, target: params.target, details: params.details });
