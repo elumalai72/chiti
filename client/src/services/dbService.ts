@@ -115,13 +115,13 @@ class DbService {
   // QUERIES
   // ==========================================
   public async getChitisByAgent(agentId: string): Promise<Chiti[]> {
-    const { data, error } = await supabase.from('chitis').select(`*, calculation_rules (*)`).eq('agent_id', agentId).order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('chitis').select(`*, calculation_rules!fk_rule_chiti (*)`).eq('agent_id', agentId).order('created_at', { ascending: false });
     if (error) throw error;
     return data.map(this.mapChiti);
   }
 
   public async getChitiById(chitiId: string): Promise<Chiti | null> {
-    const { data, error } = await supabase.from('chitis').select(`*, calculation_rules (*)`).eq('id', chitiId).maybeSingle();
+    const { data, error } = await supabase.from('chitis').select(`*, calculation_rules!fk_rule_chiti (*)`).eq('id', chitiId).maybeSingle();
     if (error) throw error;
     return data ? this.mapChiti(data) : null;
   }
