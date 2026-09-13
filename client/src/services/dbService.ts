@@ -275,6 +275,21 @@ class DbService {
     return this.getChitiById(chitiId) as Promise<Chiti>;
   }
 
+  public async deleteChiti(chitiId: string): Promise<void> {
+    // Manually cascade delete just in case Supabase doesn't have ON DELETE CASCADE set
+    await supabase.from('ledger').delete().eq('chiti_id', chitiId);
+    await supabase.from('payments').delete().eq('chiti_id', chitiId);
+    await supabase.from('payouts').delete().eq('chiti_id', chitiId);
+    await supabase.from('loans').delete().eq('chiti_id', chitiId);
+    await supabase.from('chit_months').delete().eq('chiti_id', chitiId);
+    await supabase.from('chit_members').delete().eq('chiti_id', chitiId);
+    await supabase.from('calculation_rules').delete().eq('chiti_id', chitiId);
+    
+    // Finally delete the Chiti itself
+    const { error } = await supabase.from('chitis').delete().eq('id', chitiId);
+    if (error) throw error;
+  }
+
   public async addMemberToChiti(params: {
     agentId: string;
     chitiId: string;

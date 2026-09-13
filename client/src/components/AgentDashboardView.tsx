@@ -14,9 +14,10 @@ import {
   Sparkles,
   Award,
   Calendar,
-  Clock,
   Calculator,
-  Download
+  Download,
+  Trash2,
+  Clock
 } from 'lucide-react';
 
 interface AgentDashboardViewProps {
@@ -94,6 +95,22 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
     } catch (e: any) {
       alert(e.message);
       setIsLoading(false);
+    }
+  };
+
+  const handleDeleteChiti = async (chitiId: string, chitiName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const confirmed = window.confirm(`Are you sure you want to completely delete "${chitiName}"? This action cannot be undone and will remove all members, payments, and history.`);
+    if (confirmed) {
+      setIsLoading(true);
+      try {
+        await dbService.deleteChiti(chitiId);
+        setDataVersion(v => v + 1);
+      } catch (err: any) {
+        alert(`Failed to delete Chiti: ${err.message}`);
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -390,7 +407,15 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
                         </h3>
                       </div>
 
-                      <div style={{ textAlign: 'right' }}>
+                      <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                        <button 
+                          onClick={(e) => handleDeleteChiti(chiti.id, chiti.name, e)}
+                          style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: '4px', marginBottom: '4px', opacity: 0.7 }}
+                          className="hover-lift"
+                          title="Delete Chiti"
+                        >
+                          <Trash2 size={16} />
+                        </button>
                         <div style={{ fontSize: '10px', color: '#64748B', textTransform: 'uppercase', fontWeight: 700 }}>Due Date</div>
                         <span className="badge badge-pending" style={{ fontSize: '12px', marginTop: '2px' }}>
                           <Clock size={12} /> {chiti.paymentDueDay}th of month
