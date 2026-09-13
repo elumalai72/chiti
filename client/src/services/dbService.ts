@@ -647,6 +647,34 @@ class DbService {
     if (error) throw error;
   }
 
+  public async getExtraCommissionsByChiti(chitiId: string): Promise<LedgerEntry[]> {
+    const { data, error } = await supabase
+      .from('ledger')
+      .select('*')
+      .eq('chiti_id', chitiId)
+      .eq('type', 'EXTRA_COMMISSION')
+      .order('date', { ascending: false });
+
+    if (error) throw new Error(error.message);
+    return data.map((d: any) => ({
+      id: d.id,
+      agentId: d.agent_id,
+      chitiId: d.chiti_id,
+      monthNumber: d.month_number,
+      memberId: d.member_id,
+      memberName: d.member_name,
+      type: d.type,
+      amount: Number(d.amount),
+      flow: d.flow,
+      runningBalance: Number(d.running_balance),
+      date: d.date,
+      referenceId: d.reference_id,
+      isReversal: d.is_reversal,
+      reversalOfId: d.reversal_of_id,
+      notes: d.notes
+    }));
+  }
+
   public async getLoanRepayments(loanId: string): Promise<LoanRepayment[]> {
     const { data, error } = await supabase.from('loan_repayments').select('*').eq('loan_id', loanId).order('date', { ascending: true });
     if (error) throw error;
@@ -713,6 +741,84 @@ class DbService {
       loans_recovered: Number(month.loans_recovered || 0) + params.principalRepaid,
       interest_earned: Number(month.interest_earned || 0) + params.interestRepaid
     }).eq('id', params.repaymentMonthId);
+
+    return true;
+  }
+
+  public async updateMonthCycleDate(monthId: string, newDate: string): Promise<boolean> {
+    const { data: month } = await supabase.from('chit_months').select('*').eq('id', monthId).single();
+    if (!month) throw new Error('Month not found');
+
+    const chitiId = month.chiti_id;
+    const baseMonthNumber = month.month_number;
+    
+    // newDate is expected to be in YYYY-MM-DD format
+    const baseDate = new Date(newDate);
+
+    // Get all months >= baseMonthNumber for this chiti
+    const { data: monthsToUpdate } = await supabase.from('chit_months')
+      .select('id, month_number')
+      .eq('chiti_id', chitiId)
+      .gte('month_number', baseMonthNumber)
+      .order('month_number', { ascending: true });
+
+    if (monthsToUpdate) {
+      for (const m of monthsToUpdate) {
+        const offset = m.month_number - baseMonthNumber;
+        const targetDate = new Date(baseDate);
+        targetDate.setMonth(targetDate.getMonth() + offset);
+        
+        const year = targetDate.getFullYear();
+        const monthStr = String(targetDate.getMonth() + 1).padStart(2, '0');
+        const day = String(targetDate.getDate()).padStart(2, '0');
+        const formattedDate = `${year}-${monthStr}-${day}`;
+
+        await supabase.from('chit_months').update({ cycle_date: formattedDate }).eq('id', m.id);
+      }
+    }
+    
+    return true;
+  }
+
+  public async recordExtraCommission(params: {
+    agentId: string;
+    chitiId: string;
+    monthNumber: number;
+    memberId: string;
+    memberName: string;
+    commissionAmount: number;
+    interestAmount: number;
+    notes?: string;
+  }): Promise<boolean> {
+    const totalAmount = params.commissionAmount + params.interestAmount;
+    if (totalAmount <= 0) return false;
+
+    // We get the last ledger balance
+    const { data: lastLedger } = await supabase.from('ledger')
+      .select('running_balance')
+      .eq('agent_id', params.agentId)
+      .order('date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+      
+    let runningBal = lastLedger ? Number(lastLedger.running_balance) : 0;
+    
+    // We add this extra commission/interest to the agent's ledger (debit/withdrawal from pool into agent's pocket)
+    runningBal -= totalAmount;
+
+    await supabase.from('ledger').insert({
+      agent_id: params.agentId,
+      chiti_id: params.chitiId,
+      month_number: params.monthNumber,
+      member_id: params.memberId,
+      member_name: params.memberName,
+      type: 'EXTRA_COMMISSION',
+      amount: totalAmount,
+      flow: 'DEBIT',
+      running_balance: runningBal,
+      date: new Date().toISOString(),
+      notes: `Extra Commission: ₹${params.commissionAmount}, Interest: ₹${params.interestAmount} from ${params.memberName}. ${params.notes || ''}`
+    });
 
     return true;
   }

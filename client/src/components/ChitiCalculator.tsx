@@ -1,25 +1,32 @@
-import React, { useState } from 'react';
-import { Delete, RotateCcw, Equal, Percent, Divide, X as Multiply, Minus, Plus } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Delete, History, Trash2, ChevronDown } from 'lucide-react';
 
 interface ChitiCalculatorProps {
   onClose?: () => void;
   isEmbedded?: boolean;
 }
 
-// Format numbers with Indian comma grouping where appropriate without breaking decimals
+interface CalcHistoryItem {
+  id: string;
+  expression: string;
+  result: string;
+  timestamp: number;
+}
+
+const HISTORY_KEY = 'chiti_calculator_history';
+const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+
 export const formatCalculatorDisplay = (val: string): string => {
   if (!val || val === 'Error' || val === 'Cannot divide by 0') return val;
   const parts = val.split('.');
   const integerPart = parts[0];
   const decimalPart = parts.length > 1 ? '.' + parts[1] : '';
 
-  // Format integer part with Indian commas if valid number
   const isNegative = integerPart.startsWith('-');
   const absInt = isNegative ? integerPart.slice(1) : integerPart;
 
   if (!/^\d+$/.test(absInt)) return val;
 
-  // Indian comma grouping
   let lastThree = absInt.substring(absInt.length - 3);
   const otherNumbers = absInt.substring(0, absInt.length - 3);
   if (otherNumbers !== '') {
@@ -30,44 +37,72 @@ export const formatCalculatorDisplay = (val: string): string => {
   return (isNegative ? '-' : '') + formattedInt + decimalPart;
 };
 
-// Safe arithmetic helper to prevent floating-point inaccuracies
 export const safeCalculate = (a: number, b: number, op: string): number => {
   let res = 0;
   switch (op) {
-    case '+':
-      res = a + b;
-      break;
-    case '-':
-      res = a - b;
-      break;
-    case '×':
-    case '*':
-      res = a * b;
-      break;
-    case '÷':
-    case '/':
+    case '+': res = a + b; break;
+    case '-': res = a - b; break;
+    case '×': res = a * b; break;
+    case '÷': 
       if (b === 0) throw new Error('Cannot divide by 0');
-      res = a / b;
+      res = a / b; 
       break;
-    default:
-      res = b;
+    default: res = b;
   }
-  // Clean floating point artifacts
   return parseFloat(res.toFixed(10));
 };
 
-export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({
-  onClose,
-  isEmbedded = false
-}) => {
+export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({ onClose, isEmbedded = false }) => {
   const [display, setDisplay] = useState<string>('0');
   const [previousValue, setPreviousValue] = useState<number | null>(null);
   const [operator, setOperator] = useState<string | null>(null);
   const [waitingForOperand, setWaitingForOperand] = useState<boolean>(false);
   const [expression, setExpression] = useState<string>('');
   const [hasError, setHasError] = useState<boolean>(false);
+  
+  // History State
+  const [history, setHistory] = useState<CalcHistoryItem[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
 
-  // Clear all
+  useEffect(() => {
+    // Load and prune history on mount
+    const saved = localStorage.getItem(HISTORY_KEY);
+    if (saved) {
+      try {
+        const parsed: CalcHistoryItem[] = JSON.parse(saved);
+        const now = Date.now();
+        // Keep only items newer than 24 hours
+        const validHistory = parsed.filter(item => (now - item.timestamp) < TWENTY_FOUR_HOURS);
+        setHistory(validHistory);
+        if (validHistory.length !== parsed.length) {
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(validHistory));
+        }
+      } catch (e) {
+        console.error("Failed to parse calc history", e);
+      }
+    }
+  }, []);
+
+  const saveToHistory = (expr: string, res: string) => {
+    const newItem: CalcHistoryItem = {
+      id: Math.random().toString(36).substr(2, 9),
+      expression: expr,
+      result: res,
+      timestamp: Date.now()
+    };
+    
+    setHistory(prev => {
+      const updated = [newItem, ...prev].slice(0, 50); // Keep max 50 items
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const clearHistory = () => {
+    setHistory([]);
+    localStorage.removeItem(HISTORY_KEY);
+  };
+
   const handleClear = () => {
     setDisplay('0');
     setPreviousValue(null);
@@ -77,7 +112,6 @@ export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({
     setHasError(false);
   };
 
-  // Backspace / Delete last digit
   const handleBackspace = () => {
     if (hasError || waitingForOperand) {
       setDisplay('0');
@@ -91,7 +125,6 @@ export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({
     }
   };
 
-  // Number input
   const handleDigit = (digit: string) => {
     if (hasError) {
       setDisplay(digit);
@@ -99,74 +132,42 @@ export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({
       setExpression('');
       return;
     }
-
     if (waitingForOperand) {
       setDisplay(digit);
       setWaitingForOperand(false);
     } else {
-      if (display === '0') {
-        setDisplay(digit);
-      } else {
-        // Prevent overly long numbers that could overflow
+      if (display === '0') setDisplay(digit);
+      else {
         if (display.replace(/[^0-9]/g, '').length >= 14) return;
         setDisplay(display + digit);
       }
     }
   };
 
-  // Decimal point
   const handleDecimal = () => {
-    if (hasError) {
+    if (hasError || waitingForOperand) {
       setDisplay('0.');
       setHasError(false);
-      return;
-    }
-
-    if (waitingForOperand) {
-      setDisplay('0.');
       setWaitingForOperand(false);
       return;
     }
-
     if (!display.includes('.')) {
       setDisplay(display + '.');
     }
   };
 
-  // Toggle positive / negative sign
-  const handleToggleSign = () => {
-    if (hasError || display === '0') return;
-    if (display.startsWith('-')) {
-      setDisplay(display.slice(1));
-    } else {
-      setDisplay('-' + display);
-    }
-  };
-
-  // Percentage calculation
   const handlePercentage = () => {
     if (hasError) return;
     const current = parseFloat(display);
     if (isNaN(current)) return;
-
-    if (previousValue !== null && operator) {
-      // Calculate percentage of previous value (e.g., 1000 + 5% = 50)
-      const percentVal = (previousValue * current) / 100;
-      setDisplay(String(parseFloat(percentVal.toFixed(10))));
-    } else {
-      // Standalone percentage: current / 100
-      const percentVal = current / 100;
-      setDisplay(String(parseFloat(percentVal.toFixed(10))));
-    }
+    const percentVal = (previousValue !== null && operator) 
+      ? (previousValue * current) / 100 
+      : current / 100;
+    setDisplay(String(parseFloat(percentVal.toFixed(10))));
   };
 
-  // Operator handling (+, -, ×, ÷)
   const handleOperator = (nextOperator: string) => {
-    if (hasError) {
-      handleClear();
-      return;
-    }
-
+    if (hasError) { handleClear(); return; }
     const currentVal = parseFloat(display);
     if (isNaN(currentVal)) return;
 
@@ -190,12 +191,10 @@ export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({
     } else {
       setExpression(`${formatCalculatorDisplay(String(previousValue))} ${nextOperator}`);
     }
-
     setWaitingForOperand(true);
     setOperator(nextOperator);
   };
 
-  // Equals calculation
   const handleEquals = () => {
     if (hasError) return;
     const currentVal = parseFloat(display);
@@ -204,11 +203,17 @@ export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({
     if (previousValue !== null && operator) {
       try {
         const result = safeCalculate(previousValue, currentVal, operator);
-        setExpression(`${formatCalculatorDisplay(String(previousValue))} ${operator} ${formatCalculatorDisplay(display)} =`);
+        const finalExpr = `${formatCalculatorDisplay(String(previousValue))} ${operator} ${formatCalculatorDisplay(display)}`;
+        const finalRes = formatCalculatorDisplay(String(result));
+        
+        setExpression(`${finalExpr} =`);
         setDisplay(String(result));
         setPreviousValue(null);
         setOperator(null);
         setWaitingForOperand(true);
+
+        // Save to History!
+        saveToHistory(finalExpr, finalRes);
       } catch (err: any) {
         setDisplay(err.message || 'Error');
         setHasError(true);
@@ -219,416 +224,195 @@ export const ChitiCalculator: React.FC<ChitiCalculatorProps> = ({
     }
   };
 
-  // Quick preset calculation for Chiti commission (5% of current value)
-  const handlePresetCommission = (rate: number) => {
-    if (hasError) return;
-    const currentVal = parseFloat(display);
-    if (isNaN(currentVal) || currentVal <= 0) return;
-    const commission = parseFloat(((currentVal * rate) / 100).toFixed(2));
-    setExpression(`${rate}% of ${formatCalculatorDisplay(display)} =`);
-    setDisplay(String(commission));
-    setWaitingForOperand(true);
-  };
-
-  // Determine dynamic font size based on length of display to avoid overflow
-  const getDisplayFontSize = (text: string): string => {
-    const len = text.length;
-    if (len <= 8) return '34px';
-    if (len <= 11) return '28px';
-    if (len <= 14) return '22px';
-    return '18px';
-  };
-
-  const formattedDisplay = formatCalculatorDisplay(display);
-
-  return (
-    <div 
+  // UI Components
+  const BaseButton = ({ onClick, children, bg, color, flex = 1 }: any) => (
+    <button
+      onClick={onClick}
       style={{
-        background: '#0D1322',
-        color: '#FFFFFF',
-        borderRadius: isEmbedded ? '20px' : '24px',
-        padding: '20px 16px',
-        boxShadow: isEmbedded ? 'var(--shadow-md)' : '0 20px 60px rgba(0, 0, 0, 0.45)',
-        width: '100%',
-        maxWidth: '380px',
-        margin: '0 auto',
+        flex,
+        aspectRatio: flex === 1 ? '1 / 1' : 'auto',
+        borderRadius: flex === 1 ? '50%' : '24px',
+        border: 'none',
+        background: bg,
+        color: color,
+        fontSize: '28px',
+        fontWeight: 400,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'pointer',
+        padding: 0,
         userSelect: 'none'
       }}
     >
-      {/* Header bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div 
-            style={{
-              width: '28px',
-              height: '28px',
-              borderRadius: '8px',
-              background: 'linear-gradient(135deg, #7C3AED 0%, #4F46E5 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#FFFFFF',
-              fontWeight: 800,
-              fontSize: '12px'
-            }}
-          >
-            ₹
-          </div>
-          <div>
-            <div style={{ fontSize: '13px', fontWeight: 800, letterSpacing: '0.5px' }}>CHITI CALCULATOR</div>
-            <div style={{ fontSize: '10px', color: '#94A3B8' }}>Quick Financial Utility</div>
-          </div>
-        </div>
+      {children}
+    </button>
+  );
 
+  const C_NUM_BG = '#2C2F36';
+  const C_NUM_TXT = '#FFFFFF';
+  const C_OP_BG = '#494368';
+  const C_OP_TXT = '#D2C3FF'; // Light purple for operators
+  const C_EQ_BG = '#F7B8C4'; // Pink
+  const C_EQ_TXT = '#1A1C20';
+
+  const formattedDisplay = formatCalculatorDisplay(display);
+  const displayLen = formattedDisplay.length;
+  const fontSize = displayLen > 12 ? '32px' : displayLen > 9 ? '42px' : '56px';
+
+  return (
+    <div style={{
+      background: '#1A1C20',
+      color: '#FFFFFF',
+      borderRadius: isEmbedded ? '0' : '24px', // Standard Android radius
+      width: '100%',
+      maxWidth: '400px',
+      margin: '0 auto',
+      height: '100%',
+      minHeight: '600px', // Match typical mobile ratio
+      display: 'flex',
+      flexDirection: 'column',
+      position: 'relative',
+      fontFamily: 'sans-serif',
+      boxShadow: isEmbedded ? 'none' : '0 20px 40px rgba(0,0,0,0.5)'
+    }}>
+      
+      {/* Top Bar with History Icon */}
+      <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between' }}>
+        <button 
+          onClick={() => setShowHistory(!showHistory)}
+          style={{ background: 'transparent', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: '8px' }}
+        >
+          <History size={24} />
+        </button>
         {onClose && (
-          <button
+          <button 
             onClick={onClose}
-            className="btn btn-glass btn-sm"
-            style={{ width: '32px', height: '32px', padding: 0, borderRadius: '50%', minHeight: '32px' }}
-            aria-label="Close Calculator"
+            style={{ background: 'transparent', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: '8px' }}
           >
-            ✕
+            <ChevronDown size={24} />
           </button>
         )}
       </div>
 
-      {/* Screen / Display Area */}
-      <div 
-        style={{
-          background: '#070B14',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          borderRadius: '16px',
-          padding: '14px 16px',
-          marginBottom: '14px',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-end',
-          justifyContent: 'center',
-          minHeight: '84px',
-          overflow: 'hidden'
-        }}
-      >
-        {/* Expression tracking */}
-        <div 
-          style={{
-            fontSize: '12px',
-            color: '#A78BFA',
-            fontWeight: 600,
-            minHeight: '18px',
-            maxWidth: '100%',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          {expression || ' '}
+      {/* Screen */}
+      <div style={{ 
+        flex: 1, 
+        display: 'flex', 
+        flexDirection: 'column', 
+        justifyContent: 'flex-end', 
+        alignItems: 'flex-end',
+        padding: '0 24px 24px',
+        overflow: 'hidden'
+      }}>
+        <div style={{ fontSize: '24px', color: '#9CA3AF', minHeight: '30px' }}>
+          {expression}
         </div>
-
-        {/* Current Value Display */}
-        <div 
-          style={{
-            fontSize: getDisplayFontSize(formattedDisplay),
-            fontWeight: 900,
-            color: hasError ? '#F87171' : '#FFFFFF',
-            lineHeight: 1.1,
-            marginTop: '4px',
-            maxWidth: '100%',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontVariantNumeric: 'tabular-nums'
-          }}
-        >
+        <div style={{ fontSize: fontSize, fontWeight: 300, color: hasError ? '#F87171' : '#FFFFFF', transition: 'font-size 0.2s', marginTop: '8px' }}>
           {formattedDisplay}
         </div>
       </div>
 
-      {/* Chiti Quick Calculation Shortcuts */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-        <button
-          type="button"
-          onClick={() => handlePresetCommission(5)}
-          className="btn btn-glass btn-sm"
-          style={{ flex: 1, padding: '6px 4px', fontSize: '11px', borderRadius: '10px', minHeight: '34px' }}
-          title="Calculate 5% commission"
-        >
-          5% Comm.
-        </button>
-        <button
-          type="button"
-          onClick={() => handlePresetCommission(10)}
-          className="btn btn-glass btn-sm"
-          style={{ flex: 1, padding: '6px 4px', fontSize: '11px', borderRadius: '10px', minHeight: '34px' }}
-          title="Calculate 10% discount"
-        >
-          10% Disc.
-        </button>
-        <button
-          type="button"
-          onClick={handleClear}
-          className="btn btn-glass btn-sm"
-          style={{ flex: 1, padding: '6px 4px', fontSize: '11px', borderRadius: '10px', minHeight: '34px', color: '#F87171' }}
-        >
-          Reset
-        </button>
-      </div>
-
-      {/* Calculator Buttons Grid (4 Columns, Touch targets >= 46px) */}
-      <div 
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          gap: '8px'
-        }}
-      >
+      {/* Keypad */}
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        gap: '12px', 
+        padding: '24px',
+        background: '#1A1C20'
+      }}>
         {/* ROW 1 */}
-        <button
-          type="button"
-          onClick={handleClear}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
-            background: 'rgba(239, 68, 68, 0.12)',
-            color: '#FCA5A5',
-            fontWeight: 800,
-            fontSize: '15px',
-            cursor: 'pointer'
-          }}
-        >
-          AC
-        </button>
-        <button
-          type="button"
-          onClick={handleBackspace}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            background: 'rgba(255, 255, 255, 0.06)',
-            color: '#CBD5E1',
-            fontWeight: 700,
-            fontSize: '15px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-          aria-label="Backspace"
-        >
-          <Delete size={18} />
-        </button>
-        <button
-          type="button"
-          onClick={handlePercentage}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            background: 'rgba(255, 255, 255, 0.06)',
-            color: '#A78BFA',
-            fontWeight: 700,
-            fontSize: '16px',
-            cursor: 'pointer'
-          }}
-        >
-          %
-        </button>
-        <button
-          type="button"
-          onClick={() => handleOperator('÷')}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: operator === '÷' ? '2px solid #A855F7' : '1px solid rgba(124, 58, 237, 0.3)',
-            background: operator === '÷' ? 'var(--primary-purple)' : 'rgba(124, 58, 237, 0.16)',
-            color: '#FFFFFF',
-            fontWeight: 800,
-            fontSize: '18px',
-            cursor: 'pointer'
-          }}
-        >
-          ÷
-        </button>
-
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <BaseButton onClick={handleClear} bg={C_OP_BG} color={C_OP_TXT}>AC</BaseButton>
+          <BaseButton onClick={() => {}} bg={C_OP_BG} color={C_OP_TXT}>( )</BaseButton>
+          <BaseButton onClick={handlePercentage} bg={C_OP_BG} color={C_OP_TXT}>%</BaseButton>
+          <BaseButton onClick={() => handleOperator('÷')} bg={C_OP_BG} color={C_OP_TXT}>÷</BaseButton>
+        </div>
+        
         {/* ROW 2 */}
-        {['7', '8', '9'].map(d => (
-          <button
-            key={d}
-            type="button"
-            onClick={() => handleDigit(d)}
-            style={{
-              minHeight: '48px',
-              borderRadius: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              background: '#151F36',
-              color: '#FFFFFF',
-              fontWeight: 700,
-              fontSize: '18px',
-              cursor: 'pointer'
-            }}
-          >
-            {d}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => handleOperator('×')}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: operator === '×' ? '2px solid #A855F7' : '1px solid rgba(124, 58, 237, 0.3)',
-            background: operator === '×' ? 'var(--primary-purple)' : 'rgba(124, 58, 237, 0.16)',
-            color: '#FFFFFF',
-            fontWeight: 800,
-            fontSize: '18px',
-            cursor: 'pointer'
-          }}
-        >
-          ×
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <BaseButton onClick={() => handleDigit('7')} bg={C_NUM_BG} color={C_NUM_TXT}>7</BaseButton>
+          <BaseButton onClick={() => handleDigit('8')} bg={C_NUM_BG} color={C_NUM_TXT}>8</BaseButton>
+          <BaseButton onClick={() => handleDigit('9')} bg={C_NUM_BG} color={C_NUM_TXT}>9</BaseButton>
+          <BaseButton onClick={() => handleOperator('×')} bg={C_OP_BG} color={C_OP_TXT}>×</BaseButton>
+        </div>
 
         {/* ROW 3 */}
-        {['4', '5', '6'].map(d => (
-          <button
-            key={d}
-            type="button"
-            onClick={() => handleDigit(d)}
-            style={{
-              minHeight: '48px',
-              borderRadius: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              background: '#151F36',
-              color: '#FFFFFF',
-              fontWeight: 700,
-              fontSize: '18px',
-              cursor: 'pointer'
-            }}
-          >
-            {d}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => handleOperator('-')}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: operator === '-' ? '2px solid #A855F7' : '1px solid rgba(124, 58, 237, 0.3)',
-            background: operator === '-' ? 'var(--primary-purple)' : 'rgba(124, 58, 237, 0.16)',
-            color: '#FFFFFF',
-            fontWeight: 800,
-            fontSize: '20px',
-            cursor: 'pointer'
-          }}
-        >
-          −
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <BaseButton onClick={() => handleDigit('4')} bg={C_NUM_BG} color={C_NUM_TXT}>4</BaseButton>
+          <BaseButton onClick={() => handleDigit('5')} bg={C_NUM_BG} color={C_NUM_TXT}>5</BaseButton>
+          <BaseButton onClick={() => handleDigit('6')} bg={C_NUM_BG} color={C_NUM_TXT}>6</BaseButton>
+          <BaseButton onClick={() => handleOperator('-')} bg={C_OP_BG} color={C_OP_TXT}>−</BaseButton>
+        </div>
 
         {/* ROW 4 */}
-        {['1', '2', '3'].map(d => (
-          <button
-            key={d}
-            type="button"
-            onClick={() => handleDigit(d)}
-            style={{
-              minHeight: '48px',
-              borderRadius: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.06)',
-              background: '#151F36',
-              color: '#FFFFFF',
-              fontWeight: 700,
-              fontSize: '18px',
-              cursor: 'pointer'
-            }}
-          >
-            {d}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => handleOperator('+')}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: operator === '+' ? '2px solid #A855F7' : '1px solid rgba(124, 58, 237, 0.3)',
-            background: operator === '+' ? 'var(--primary-purple)' : 'rgba(124, 58, 237, 0.16)',
-            color: '#FFFFFF',
-            fontWeight: 800,
-            fontSize: '20px',
-            cursor: 'pointer'
-          }}
-        >
-          +
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <BaseButton onClick={() => handleDigit('1')} bg={C_NUM_BG} color={C_NUM_TXT}>1</BaseButton>
+          <BaseButton onClick={() => handleDigit('2')} bg={C_NUM_BG} color={C_NUM_TXT}>2</BaseButton>
+          <BaseButton onClick={() => handleDigit('3')} bg={C_NUM_BG} color={C_NUM_TXT}>3</BaseButton>
+          <BaseButton onClick={() => handleOperator('+')} bg={C_OP_BG} color={C_OP_TXT}>+</BaseButton>
+        </div>
 
         {/* ROW 5 */}
-        <button
-          type="button"
-          onClick={handleToggleSign}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
-            background: '#151F36',
-            color: '#A78BFA',
-            fontWeight: 700,
-            fontSize: '16px',
-            cursor: 'pointer'
-          }}
-        >
-          ±
-        </button>
-        <button
-          type="button"
-          onClick={() => handleDigit('0')}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
-            background: '#151F36',
-            color: '#FFFFFF',
-            fontWeight: 700,
-            fontSize: '18px',
-            cursor: 'pointer'
-          }}
-        >
-          0
-        </button>
-        <button
-          type="button"
-          onClick={handleDecimal}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
-            background: '#151F36',
-            color: '#FFFFFF',
-            fontWeight: 800,
-            fontSize: '20px',
-            cursor: 'pointer'
-          }}
-        >
-          .
-        </button>
-        <button
-          type="button"
-          onClick={handleEquals}
-          style={{
-            minHeight: '48px',
-            borderRadius: '12px',
-            border: 'none',
-            background: 'var(--gradient-primary)',
-            color: '#FFFFFF',
-            fontWeight: 900,
-            fontSize: '22px',
-            cursor: 'pointer',
-            boxShadow: '0 4px 16px rgba(124, 58, 237, 0.45)'
-          }}
-        >
-          =
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <BaseButton onClick={() => handleDigit('0')} bg={C_NUM_BG} color={C_NUM_TXT}>0</BaseButton>
+          <BaseButton onClick={handleDecimal} bg={C_NUM_BG} color={C_NUM_TXT}>.</BaseButton>
+          <BaseButton onClick={handleBackspace} bg={C_NUM_BG} color={C_NUM_TXT}>
+            <Delete size={28} />
+          </BaseButton>
+          <BaseButton onClick={handleEquals} bg={C_EQ_BG} color={C_EQ_TXT}>=</BaseButton>
+        </div>
       </div>
+
+      {/* History Slide-Over Panel */}
+      {showHistory && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: '#1A1C20',
+          borderRadius: isEmbedded ? '0' : '24px',
+          zIndex: 10,
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 500 }}>History (24h)</h3>
+            <div style={{ display: 'flex', gap: '16px' }}>
+              <button onClick={clearHistory} style={{ background: 'transparent', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: '8px' }}>
+                <Trash2 size={20} />
+              </button>
+              <button onClick={() => setShowHistory(false)} style={{ background: 'transparent', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: '8px' }}>
+                <ChevronDown size={24} />
+              </button>
+            </div>
+          </div>
+          
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px 0' }}>
+            {history.length === 0 ? (
+              <div style={{ textAlign: 'center', color: '#6B7280', marginTop: '40px' }}>
+                No calculations in the last 24 hours.
+              </div>
+            ) : (
+              history.map(item => (
+                <div key={item.id} style={{ padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                  <div style={{ fontSize: '16px', color: '#9CA3AF', textAlign: 'right', marginBottom: '8px' }}>
+                    {item.expression}
+                  </div>
+                  <div style={{ fontSize: '28px', color: '#FFFFFF', textAlign: 'right', fontWeight: 500 }}>
+                    = {item.result}
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#4B5563', textAlign: 'left', marginTop: '8px' }}>
+                    {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
