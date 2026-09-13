@@ -175,7 +175,7 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
           </div>
 
           <div style={{ overflowX: 'auto', position: 'relative', paddingLeft: '0', paddingRight: '0', borderRadius: '4px', background: '#fff' }}>
-            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, position: 'relative', zIndex: 2, fontFamily: '"Caveat", "Kalam", "Comic Sans MS", cursive, sans-serif' }}>
+            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, position: 'relative', zIndex: 2, fontFamily: '"Times New Roman", Times, serif' }}>
               <thead>
                 <tr>
                   <th style={{ padding: '8px 16px', textAlign: 'left', minWidth: '180px', verticalAlign: 'bottom', borderBottom: '2px solid #1f2937', position: 'sticky', left: 0, background: '#fff', zIndex: 30, borderRight: '2px solid rgba(239, 68, 68, 0.7)' }}>

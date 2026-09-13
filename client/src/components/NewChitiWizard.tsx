@@ -27,11 +27,11 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
   // Step 1: Chiti Details
   const [name, setName] = useState<string>('');
   const [code, setCode] = useState<string>('');
-  const [totalMembers, setTotalMembers] = useState<number>(41);
-  const [monthlyContribution, setMonthlyContribution] = useState<number>(3000);
-  const [durationMonths, setDurationMonths] = useState<number>(41);
+  const [totalMembers, setTotalMembers] = useState<number | ''>(41);
+  const [monthlyContribution, setMonthlyContribution] = useState<number | ''>(3000);
+  const [durationMonths, setDurationMonths] = useState<number | ''>(41);
   const [startDate, setStartDate] = useState<string>(new Date().toISOString().slice(0, 10));
-  const [paymentDueDay, setPaymentDueDay] = useState<number>(10);
+  const [paymentDueDay, setPaymentDueDay] = useState<number | ''>(10);
   const [notes, setNotes] = useState<string>('');
 
   // Step 2: Real Members List
@@ -42,11 +42,11 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
   // Step 3: Rules
   const [auctionType, setAuctionType] = useState<AuctionType>('REVERSE_BID_LOWEST_WINS');
   const [commissionType, setCommissionType] = useState<CommissionType>('FIXED');
-  const [commissionValue, setCommissionValue] = useState<number>(5000);
+  const [commissionValue, setCommissionValue] = useState<number | ''>(5000);
   const [surplusStrategy, setSurplusStrategy] = useState<SurplusStrategy>('DIVIDEND_DEDUCTION');
 
   // Dynamic pool calculation
-  const expectedMonthlyPool = calculateExpectedMonthlyPool(totalMembers, monthlyContribution);
+  const expectedMonthlyPool = calculateExpectedMonthlyPool(Number(totalMembers) || 0, Number(monthlyContribution) || 0);
 
   // Advance to Step 2
   const handleNextToStep2 = () => {
@@ -54,11 +54,11 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
       alert('Please enter a Chiti Name (e.g. Lakshmi Chiti)');
       return;
     }
-    if (totalMembers <= 1) {
+    if (!totalMembers || totalMembers <= 1) {
       alert('A Chiti must have at least 2 members');
       return;
     }
-    if (monthlyContribution <= 0) {
+    if (!monthlyContribution || monthlyContribution <= 0) {
       alert('Please enter a valid monthly contribution amount');
       return;
     }
@@ -70,15 +70,16 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
     }
 
     // Initialize blank member rows up to totalMembers if list is empty
+    const tMembers = Number(totalMembers) || 0;
     if (membersList.length === 0) {
-      const initial = Array.from({ length: totalMembers }, () => ({
+      const initial = Array.from({ length: tMembers }, () => ({
         fullName: '',
         phone: '',
         address: ''
       }));
       setMembersList(initial);
-    } else if (membersList.length < totalMembers) {
-      const diff = totalMembers - membersList.length;
+    } else if (membersList.length < tMembers) {
+      const diff = tMembers - membersList.length;
       const additional = Array.from({ length: diff }, () => ({ fullName: '', phone: '', address: '' }));
       setMembersList([...membersList, ...additional]);
     }
@@ -106,7 +107,7 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
     });
 
     setMembersList(updated);
-    if (updated.length > totalMembers) {
+    if (updated.length > (Number(totalMembers) || 0)) {
       setTotalMembers(updated.length);
       setDurationMonths(updated.length);
     }
@@ -122,8 +123,8 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
 
   const handleAddSingleMemberRow = () => {
     setMembersList([...membersList, { fullName: '', phone: '', address: '' }]);
-    setTotalMembers(m => m + 1);
-    setDurationMonths(m => m + 1);
+    setTotalMembers(m => (Number(m) || 0) + 1);
+    setDurationMonths(m => (Number(m) || 0) + 1);
   };
 
   const handleRemoveMemberRow = (index: number) => {
@@ -155,10 +156,10 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
       version: 1,
       auctionType,
       commissionType,
-      commissionValue,
+      commissionValue: Number(commissionValue) || 0,
       surplusStrategy,
       effectiveFromMonth: 1,
-      description: `${auctionType} with ${commissionType} commission (${formatINR(commissionValue)})`
+      description: `${auctionType} with ${commissionType} commission (${formatINR(Number(commissionValue) || 0)})`
     };
 
     onCreated({
@@ -166,10 +167,10 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
       code: code.trim().toUpperCase() || 'CHITI-01',
       name: name.trim(),
       totalMembers: finalMemberCount,
-      monthlyContribution,
+      monthlyContribution: Number(monthlyContribution) || 0,
       durationMonths: finalMemberCount,
       startDate,
-      paymentDueDay,
+      paymentDueDay: Number(paymentDueDay) || 1,
       rule,
       members: validMembers,
       notes
@@ -258,9 +259,15 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
                   inputMode="numeric"
                   value={totalMembers}
                   onChange={e => {
-                    const val = parseInt(e.target.value) || 0;
-                    setTotalMembers(val);
-                    setDurationMonths(val);
+                    const val = e.target.value;
+                    if (val === '') {
+                      setTotalMembers('');
+                      setDurationMonths('');
+                    } else {
+                      const num = parseInt(val, 10);
+                      setTotalMembers(num);
+                      setDurationMonths(num);
+                    }
                   }}
                   min={2}
                   required
@@ -274,7 +281,10 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
                   type="number"
                   inputMode="numeric"
                   value={monthlyContribution}
-                  onChange={e => setMonthlyContribution(parseInt(e.target.value) || 0)}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setMonthlyContribution(val === '' ? '' : parseInt(val, 10));
+                  }}
                   min={100}
                   step={100}
                   required
@@ -301,7 +311,7 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
                   Dynamic Pool Calculation
                 </div>
                 <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
-                  {totalMembers} Members × {formatINR(monthlyContribution)}
+                  {totalMembers || 0} Members × {formatINR(Number(monthlyContribution) || 0)}
                 </div>
               </div>
               <div style={{ fontSize: '22px', fontWeight: 900, color: '#7C3AED' }} className="tabular-nums">
@@ -328,7 +338,10 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
                   type="number"
                   inputMode="numeric"
                   value={paymentDueDay}
-                  onChange={e => setPaymentDueDay(parseInt(e.target.value) || 1)}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setPaymentDueDay(val === '' ? '' : parseInt(val, 10));
+                  }}
                   min={1}
                   max={31}
                 />
@@ -341,7 +354,7 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
               className="btn btn-primary btn-block"
               style={{ marginTop: '8px', minHeight: '46px' }}
             >
-              <span>Next: Add Real Members ({totalMembers})</span>
+              <span>Next: Add Real Members ({totalMembers || 0})</span>
               <ArrowRight size={16} />
             </button>
           </div>
@@ -518,7 +531,10 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
                   type="number"
                   inputMode="numeric"
                   value={commissionValue}
-                  onChange={e => setCommissionValue(parseFloat(e.target.value) || 0)}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setCommissionValue(val === '' ? '' : parseFloat(val));
+                  }}
                   min={0}
                 />
               </div>
@@ -573,7 +589,7 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Monthly / Member:</span>
-                  <div style={{ fontWeight: 800, color: '#7C3AED' }} className="tabular-nums">{formatINR(monthlyContribution)}</div>
+                  <div style={{ fontWeight: 800, color: '#7C3AED' }} className="tabular-nums">{formatINR(Number(monthlyContribution) || 0)}</div>
                 </div>
                 <div>
                   <span style={{ color: '#64748B' }}>Expected Pool:</span>
@@ -582,7 +598,7 @@ export const NewChitiWizard: React.FC<NewChitiWizardProps> = ({
                 <div>
                   <span style={{ color: '#64748B' }}>Agent Commission:</span>
                   <div style={{ fontWeight: 800, color: '#0F172A' }}>
-                    {commissionType === 'FIXED' ? formatINR(commissionValue) : `${commissionValue}%`}
+                    {commissionType === 'FIXED' ? formatINR(Number(commissionValue) || 0) : `${commissionValue}%`}
                   </div>
                 </div>
               </div>

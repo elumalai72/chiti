@@ -263,10 +263,10 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <div>
             <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#0F172A', letterSpacing: '-0.3px' }}>
-              UPCOMING CHITIS
+              ALL CHITIS
             </h2>
             <div style={{ fontSize: '12px', color: '#64748B' }}>
-              {chitis.length > 0 ? `Chitis with payment dates near today` : 'Your registered Chitis will appear here'}
+              {chitis.length > 0 ? `All your active and completed Chitis` : 'Your registered Chitis will appear here'}
             </div>
           </div>
 
@@ -329,11 +329,7 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
             {(() => {
               const currentDay = new Date().getDate();
-              const upcoming = chitis.filter(c => {
-                let diff = c.paymentDueDay - currentDay;
-                if (diff < 0) diff += 30; // Approx next month
-                return diff >= 0 && diff <= 10;
-              }).sort((a, b) => {
+              const upcoming = chitis.sort((a, b) => {
                 let diffA = a.paymentDueDay - currentDay;
                 if (diffA < 0) diffA += 30;
                 let diffB = b.paymentDueDay - currentDay;
@@ -344,9 +340,8 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
               if (upcoming.length === 0) {
                 return (
                   <div className="card" style={{ padding: '24px', textAlign: 'center', color: '#64748B', gridColumn: '1 / -1' }}>
-                    <Calendar size={32} color="#CBD5E1" style={{ margin: '0 auto 12px' }} />
-                    <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: '4px' }}>No Chitis Due Soon</div>
-                    <div>Check the Collect tab to see all your active Chitis.</div>
+                    <Layers size={32} color="#CBD5E1" style={{ margin: '0 auto 12px' }} />
+                    <div style={{ fontWeight: 700, color: '#0F172A', marginBottom: '4px' }}>No Chitis Found</div>
                   </div>
                 );
               }
@@ -407,7 +402,7 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
                     <div 
                       style={{ 
                         display: 'grid', 
-                        gridTemplateColumns: '1fr 1fr', 
+                        gridTemplateColumns: 'repeat(3, 1fr)', 
                         gap: '10px', 
                         marginTop: '16px',
                         padding: '12px',
@@ -417,14 +412,20 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
                     >
                       <div>
                         <div style={{ fontSize: '11px', color: '#64748B' }}>Total Members</div>
-                        <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }}>
-                          {chiti.totalMembers} Members
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: '#0F172A', marginTop: '2px' }}>
+                          {chiti.totalMembers}
                         </div>
                       </div>
                       <div>
                         <div style={{ fontSize: '11px', color: '#64748B' }}>Monthly / Member</div>
-                        <div style={{ fontSize: '15px', fontWeight: 800, color: '#7C3AED', marginTop: '2px' }} className="tabular-nums">
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: '#7C3AED', marginTop: '2px' }} className="tabular-nums">
                           {formatINR(chiti.monthlyContribution)}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '11px', color: '#64748B' }}>Agent Commission</div>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: '#10B981', marginTop: '2px' }} className="tabular-nums">
+                          {chiti.rule?.commissionType === 'FIXED' ? formatINR(chiti.rule.commissionValue) : `${chiti.rule?.commissionValue || 0}%`}
                         </div>
                       </div>
                     </div>

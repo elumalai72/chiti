@@ -9,6 +9,7 @@ import { LedgerTable } from './components/LedgerTable';
 import { CommissionView } from './components/CommissionView';
 import { AlertsView } from './components/AlertsView';
 import { CollectView } from './components/CollectView';
+import { DigitalBookView } from './components/DigitalBookView';
 import { ChitiLogo } from './components/ChitiLogo';
 import { SplashScreen } from './components/SplashScreen';
 import { ChitiCalculator } from './components/ChitiCalculator';
@@ -23,6 +24,7 @@ import {
   Users, 
   CreditCard, 
   BookOpen, 
+  Image,
   LogOut,
   Phone,
   Plus,
@@ -168,6 +170,12 @@ export const App: React.FC = () => {
             <Bell size={18} /> <span>Alerts</span>
           </button>
           <button 
+            onClick={() => { setSelectedChitiId(null); setActiveTab('digital-book'); }}
+            className={`sidebar-nav-link ${!selectedChitiId && activeTab === 'digital-book' ? 'active' : ''}`}
+          >
+            <Image size={18} /> <span>Digital Book</span>
+          </button>
+          <button 
             onClick={() => { setSelectedChitiId(null); setActiveTab('history'); }}
             className={`sidebar-nav-link ${!selectedChitiId && activeTab === 'history' ? 'active' : ''}`}
           >
@@ -217,6 +225,8 @@ export const App: React.FC = () => {
             <CommissionView agentId={currentAgent.id} chitis={chitis} />
           ) : activeTab === 'alerts' ? (
             <AlertsView agentId={currentAgent.id} chitis={chitis} allMembers={allMembers} />
+          ) : activeTab === 'digital-book' ? (
+            <DigitalBookView />
           ) : activeTab === 'history' ? (
             <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '16px 16px 40px' }}>
               <div style={{ marginBottom: '18px' }}>
