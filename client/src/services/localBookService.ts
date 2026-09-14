@@ -18,6 +18,46 @@ const imagesStore = localforage.createInstance({
   storeName: 'bookImages'
 });
 
+const compressImage = async (file: File, maxDimension = 1600, quality = 0.82): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(e.target?.result as string);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error('Failed to load image for compression'));
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+};
+
 export const localBookService = {
   getDateFolders: async (): Promise<LocalFolder[]> => {
     const keys = await imagesStore.keys();
@@ -55,24 +95,44 @@ export const localBookService = {
   },
 
   uploadImage: async (file: File, folderId: string): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        if (e.target?.result) {
-          const timestamp = Date.now();
-          const key = `${folderId}_${timestamp}`;
-          try {
-            await imagesStore.setItem(key, e.target.result as string);
-            resolve();
-          } catch (err) {
-            reject(err);
+    try {
+      const compressedDataUrl = await compressImage(file);
+      const timestamp = Date.now();
+      const key = `${folderId}_${timestamp}`;
+      await imagesStore.setItem(key, compressedDataUrl);
+    } catch {
+      // Fallback to uncompressed if canvas compression fails
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          if (e.target?.result) {
+            const timestamp = Date.now();
+            const key = `${folderId}_${timestamp}`;
+            try {
+              await imagesStore.setItem(key, e.target.result as string);
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          } else {
+            reject(new Error('Failed to read file'));
           }
-        } else {
-          reject(new Error('Failed to read file'));
-        }
-      };
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file); // Store as Base64 string for easy <img> rendering
-    });
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+    }
+  },
+
+  deleteImage: async (key: string): Promise<void> => {
+    await imagesStore.removeItem(key);
+  },
+
+  deleteFolder: async (folderId: string): Promise<void> => {
+    const keys = await imagesStore.keys();
+    const folderKeys = keys.filter(k => k.startsWith(`${folderId}_`));
+    for (const k of folderKeys) {
+      await imagesStore.removeItem(k);
+    }
   }
 };

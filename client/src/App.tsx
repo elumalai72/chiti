@@ -258,11 +258,13 @@ export const App: React.FC = () => {
           onClose={() => setIsCalculatorOpen(false)} 
         />
 
-        {/* Floating Action Menu */}
-        <FloatingActionMenu 
-          onOpenCalculator={() => setIsCalculatorOpen(true)}
-          onOpenNotepad={() => setIsNotepadOpen(true)}
-        />
+        {/* Floating Action Menu (Hidden on Book tab to avoid overlapping camera controls) */}
+        {activeTab !== 'digital-book' && (
+          <FloatingActionMenu 
+            onOpenCalculator={() => setIsCalculatorOpen(true)}
+            onOpenNotepad={() => setIsNotepadOpen(true)}
+          />
+        )}
 
         {/* Notepad Modal */}
         <NotepadModal
