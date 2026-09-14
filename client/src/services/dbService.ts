@@ -143,6 +143,26 @@ class DbService {
   public async getChitMonths(chitiId: string): Promise<ChitMonth[]> {
     const { data, error } = await supabase.from('chit_months').select('*').eq('chiti_id', chitiId).order('month_number', { ascending: true });
     if (error) throw error;
+
+    // Auto-heal: If months are missing or incomplete, automatically create them
+    if (!data || data.length === 0) {
+      const chiti = await this.getChitiById(chitiId);
+      if (chiti && chiti.durationMonths > 0) {
+        const expectedMonthlyPool = chiti.expectedMonthlyPool || (chiti.totalMembers * chiti.monthlyContribution);
+        const missingMonths = Array.from({ length: chiti.durationMonths }, (_, i) => ({
+          chiti_id: chitiId,
+          month_number: i + 1,
+          cycle_date: chiti.startDate,
+          expected_collection: expectedMonthlyPool,
+          pending_collection: expectedMonthlyPool,
+          status: i === 0 ? 'OPEN' : 'UPCOMING'
+        }));
+        await supabase.from('chit_months').insert(missingMonths);
+        const { data: refetched } = await supabase.from('chit_months').select('*').eq('chiti_id', chitiId).order('month_number', { ascending: true });
+        if (refetched) return refetched.map(this.mapChitMonth);
+      }
+    }
+
     return data.map(this.mapChitMonth);
   }
 
@@ -235,33 +255,38 @@ class DbService {
       description: params.rule.description
     });
 
-    // 3. Insert Members & ChitMembers
-    for (let idx = 0; idx < params.members.length; idx++) {
-      const m = params.members[idx];
-      const memberNumber = idx + 1;
-      
-      const { data: memData, error: memErr } = await supabase.from('members').insert({
-        agent_id: params.agentId,
-        member_number: memberNumber,
-        full_name: m.fullName.trim(),
-        phone: m.phone.trim(),
-        address: m.address?.trim() || `Town Member #${memberNumber}`,
-        joining_date: params.startDate
-      }).select().single();
-      if (memErr) throw memErr;
+    // 3. Batch Insert Members & ChitMembers (fast, robust against mobile connection drops)
+    const membersToInsert = params.members.map((m, idx) => ({
+      agent_id: params.agentId,
+      member_number: idx + 1,
+      full_name: m.fullName.trim() || `Member ${idx + 1}`,
+      phone: m.phone.trim(),
+      address: m.address?.trim() || `Town Member #${idx + 1}`,
+      joining_date: params.startDate
+    }));
 
-      await supabase.from('chit_members').insert({
-        chiti_id: chitiId,
-        member_id: memData.id,
-        member_number: memberNumber,
-        full_name: memData.full_name,
-        phone: memData.phone,
-        address: memData.address,
-        pending_amount: params.monthlyContribution
-      });
-    }
+    const { data: insertedMembers, error: memErr } = await supabase
+      .from('members')
+      .insert(membersToInsert)
+      .select();
+    if (memErr) throw memErr;
 
-    // 4. Insert Months
+    const chitMembersToInsert = insertedMembers.map(mem => ({
+      chiti_id: chitiId,
+      member_id: mem.id,
+      member_number: mem.member_number,
+      full_name: mem.full_name,
+      phone: mem.phone,
+      address: mem.address,
+      pending_amount: params.monthlyContribution
+    }));
+
+    const { error: cmErr } = await supabase
+      .from('chit_members')
+      .insert(chitMembersToInsert);
+    if (cmErr) throw cmErr;
+
+    // 4. Batch Insert Months
     const monthsToInsert = Array.from({length: params.durationMonths}, (_, i) => ({
       chiti_id: chitiId,
       month_number: i + 1,
@@ -270,7 +295,8 @@ class DbService {
       pending_collection: expectedMonthlyPool,
       status: i === 0 ? 'OPEN' : 'UPCOMING'
     }));
-    await supabase.from('chit_months').insert(monthsToInsert);
+    const { error: moErr } = await supabase.from('chit_months').insert(monthsToInsert);
+    if (moErr) throw moErr;
 
     return this.getChitiById(chitiId) as Promise<Chiti>;
   }

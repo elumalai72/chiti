@@ -99,18 +99,15 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
         }
       }
     } else {
-      // Trying to check. Ensure previous month is paid if month > 1.
+      // Trying to check. If previous month is not paid, ask for confirmation
       if (month.monthNumber > 1) {
         const prevMonthKey = `${month.monthNumber - 1}_${member.memberId}`;
         const prevMonthPaymentData = paymentMap[prevMonthKey] || { totalPaid: 0 };
-        // We assume previous month is paid if they paid at least some of it, but realistically it should be fully paid.
-        // For simplicity, we check if they paid > 0, or maybe we check if they paid the total due for previous month.
-        // Let's just check if it's marked (totalPaid > 0).
         const isPrevPaid = prevMonthPaymentData.totalPaid > 0;
         
         if (!isPrevPaid) {
-          alert(`You must check Month ${month.monthNumber - 1} before checking Month ${month.monthNumber}.`);
-          return;
+          const proceed = confirm(`Month ${month.monthNumber - 1} is not marked as paid for ${member.fullName}. Do you still want to mark Month ${month.monthNumber}?`);
+          if (!proceed) return;
         }
       }
 
@@ -153,7 +150,7 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
 
   return (
     <div style={{ padding: '16px', WebkitOverflowScrolling: 'touch', background: '#e5e7eb', minHeight: '100vh' }}>
-      <div style={{ width: '100%', maxWidth: '900px', paddingBottom: '20px', margin: '0 auto' }}>
+      <div style={{ width: '100%', maxWidth: '900px', paddingBottom: '120px', margin: '0 auto' }}>
         
         {/* Notebook styling wrapper */}
         <div style={{ 
