@@ -10,7 +10,8 @@ import {
   Trash2, 
   X, 
   Plus,
-  ZoomIn
+  ZoomIn,
+  Edit3
 } from 'lucide-react';
 
 export const DigitalBookView: React.FC = () => {
@@ -20,6 +21,8 @@ export const DigitalBookView: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [previewImage, setPreviewImage] = useState<LocalImage | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ type: 'folder' | 'image', id: string, currentName: string } | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   // Dedicated inputs for Camera and Gallery to ensure 100% reliability on mobile Android & iOS
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -106,6 +109,40 @@ export const DigitalBookView: React.FC = () => {
     }
   };
 
+  const openRenameFolder = (folder: LocalFolder, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setRenameTarget({ type: 'folder', id: folder.id, currentName: folder.name });
+    setRenameValue(folder.name);
+  };
+
+  const openRenameImage = (image: LocalImage, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const initialName = image.name === image.id ? '' : image.name;
+    setRenameTarget({ type: 'image', id: image.id, currentName: initialName });
+    setRenameValue(initialName);
+  };
+
+  const handleSaveRename = async () => {
+    if (!renameTarget) return;
+    try {
+      if (renameTarget.type === 'folder') {
+        await localBookService.renameFolder(renameTarget.id, renameValue);
+        if (currentFolder && currentFolder.id === renameTarget.id) {
+          setCurrentFolder({ ...currentFolder, name: renameValue.trim() || currentFolder.id });
+        }
+        await loadFolders();
+      } else {
+        await localBookService.renameImage(renameTarget.id, renameValue);
+        if (currentFolder) {
+          await handleOpenFolder(currentFolder);
+        }
+      }
+      setRenameTarget(null);
+    } catch (err) {
+      alert('Failed to rename item.');
+    }
+  };
+
   return (
     <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '16px 16px 100px', width: '100%' }}>
       {/* Hidden dedicated inputs */}
@@ -138,6 +175,14 @@ export const DigitalBookView: React.FC = () => {
         </div>
         {currentFolder && (
           <div style={{ display: 'flex', gap: '8px' }}>
+            <button 
+              onClick={() => openRenameFolder(currentFolder)}
+              className="btn btn-secondary btn-sm"
+              style={{ gap: '6px' }}
+              title="Rename folder"
+            >
+              <Edit3 size={15} color="#7C3AED" /> Rename
+            </button>
             <button 
               onClick={() => handleDeleteFolder(currentFolder.id)}
               className="btn btn-secondary btn-sm"
@@ -248,22 +293,34 @@ export const DigitalBookView: React.FC = () => {
                     </div>
 
                     <div style={{ 
-                      padding: '8px', 
+                      padding: '8px 10px', 
                       fontSize: '11px', 
                       color: '#64748B', 
                       display: 'flex', 
                       justifyContent: 'space-between', 
                       alignItems: 'center', 
-                      borderTop: '1px solid #E2E8F0' 
+                      borderTop: '1px solid #E2E8F0',
+                      gap: '4px'
                     }}>
-                      <span>{new Date(img.createdTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      <button 
-                        onClick={() => handleDeleteImage(img.id)}
-                        style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: '4px' }}
-                        title="Delete photo"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75px', fontWeight: 600, color: '#334155' }}>
+                        {img.name !== img.id ? img.name : new Date(img.createdTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                        <button 
+                          onClick={(e) => openRenameImage(img, e)}
+                          style={{ background: 'none', border: 'none', color: '#7C3AED', cursor: 'pointer', padding: '4px' }}
+                          title="Rename page"
+                        >
+                          <Edit3 size={13} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteImage(img.id)}
+                          style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: '4px' }}
+                          title="Delete photo"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -349,16 +406,43 @@ export const DigitalBookView: React.FC = () => {
                       background: '#FFFFFF', 
                       border: '1px solid #E2E8F0', 
                       borderRadius: '16px', 
-                      padding: '20px', 
+                      padding: '16px', 
                       textAlign: 'center',
                       cursor: 'pointer',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between'
                     }}
                     className="hover-lift"
                   >
-                    <Folder size={44} color="#7C3AED" fill="rgba(124, 58, 237, 0.12)" style={{ margin: '0 auto 12px' }} />
-                    <div style={{ fontWeight: 700, color: '#0F172A', fontSize: '15px' }}>{folder.name}</div>
-                    <div style={{ fontSize: '12px', color: '#64748B', marginTop: '4px' }}>Tap to open folder</div>
+                    <div>
+                      <Folder size={42} color="#7C3AED" fill="rgba(124, 58, 237, 0.12)" style={{ margin: '0 auto 10px' }} />
+                      <div style={{ fontWeight: 700, color: '#0F172A', fontSize: '15px', wordBreak: 'break-word' }}>{folder.name}</div>
+                      {folder.name !== folder.id && (
+                        <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: '2px' }}>{folder.id}</div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '6px', marginTop: '12px' }}>
+                      <button
+                        type="button"
+                        onClick={(e) => openRenameFolder(folder, e)}
+                        className="btn btn-secondary btn-sm"
+                        style={{ padding: '3px 8px', fontSize: '11px', minHeight: '28px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        title="Rename Book"
+                      >
+                        <Edit3 size={12} color="#7C3AED" /> Rename
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }}
+                        className="btn btn-secondary btn-sm"
+                        style={{ padding: '3px 7px', fontSize: '11px', minHeight: '28px', color: '#EF4444', borderColor: '#FECACA' }}
+                        title="Delete Book"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -484,6 +568,81 @@ export const DigitalBookView: React.FC = () => {
               boxShadow: '0 8px 32px rgba(0,0,0,0.5)'
             }} 
           />
+        </div>
+      )}
+
+      {/* Rename Modal for Folders & Pages */}
+      {renameTarget && (
+        <div 
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+          onClick={() => setRenameTarget(null)}
+        >
+          <div 
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: '20px',
+              width: '100%',
+              maxWidth: '400px',
+              padding: '24px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
+              color: '#0F172A'
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: '18px', fontWeight: 800, margin: '0 0 6px' }}>
+              {renameTarget.type === 'folder' ? 'Rename Digital Book' : 'Rename Page Photo'}
+            </h3>
+            <p style={{ fontSize: '13px', color: '#64748B', margin: '0 0 16px' }}>
+              {renameTarget.type === 'folder' ? 'Give this physical register or folder a custom name.' : 'Give this captured page a custom title.'}
+            </p>
+
+            <input 
+              type="text"
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              placeholder={renameTarget.type === 'folder' ? 'e.g. Sri Krishna Chiti 2025 Book' : 'e.g. Page 1 - October Cash Entries'}
+              style={{
+                width: '100%',
+                padding: '10px 14px',
+                borderRadius: '10px',
+                border: '1px solid #CBD5E1',
+                fontSize: '14px',
+                outline: 'none',
+                marginBottom: '20px'
+              }}
+              autoFocus
+              onKeyDown={e => { if (e.key === 'Enter') handleSaveRename(); }}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button 
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="btn btn-secondary"
+                style={{ padding: '8px 16px', fontSize: '13px' }}
+              >
+                Cancel
+              </button>
+              <button 
+                type="button"
+                onClick={handleSaveRename}
+                className="btn btn-primary"
+                style={{ padding: '8px 20px', fontSize: '13px', fontWeight: 700, background: '#7C3AED' }}
+              >
+                Save Name
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

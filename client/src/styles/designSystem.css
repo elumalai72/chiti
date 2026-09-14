@@ -656,3 +656,36 @@ textarea:focus {
 .data-table tr:hover td {
   background: #F8FAFC;
 }
+
+/* ==========================================
+   APP SPEED & RENDERING OPTIMIZATIONS
+   ========================================== */
+*, *::before, *::after {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Smooth momentum scrolling on iOS and Android */
+html, body, .app-container, .desktop-sidebar, main, .jamili-notebook-container, .master-sheet-table-wrap {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Hardware accelerated transitions for snappy touch response */
+.btn, .nav-btn, .sidebar-nav-link, .card, .chip {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Layout containment for cards and interactive sheets to minimize repaint/reflow cost */
+.card, .modal-content, .bottom-sheet {
+  contain: paint;
+}
+
+/* Fast spin keyframe for minimal overhead loader */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+

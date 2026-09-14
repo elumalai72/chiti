@@ -8,6 +8,7 @@ export interface AgentAccount {
   town: string;
   state: string;
   address?: string;
+  profilePictureUrl?: string;
   createdAt: string;
 }
 

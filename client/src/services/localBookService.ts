@@ -58,6 +58,11 @@ const compressImage = async (file: File, maxDimension = 1600, quality = 0.82): P
   });
 };
 
+const metadataStore = localforage.createInstance({
+  name: 'ChitiApp',
+  storeName: 'bookMetadata'
+});
+
 export const localBookService = {
   getDateFolders: async (): Promise<LocalFolder[]> => {
     const keys = await imagesStore.keys();
@@ -68,9 +73,19 @@ export const localBookService = {
       if (folderId) folderIds.add(folderId);
     }
     
-    return Array.from(folderIds)
-      .sort((a, b) => b.localeCompare(a)) // sort descending
-      .map(id => ({ id, name: id }));
+    const sortedIds = Array.from(folderIds).sort((a, b) => b.localeCompare(a));
+    
+    const folders: LocalFolder[] = await Promise.all(
+      sortedIds.map(async (id) => {
+        const customName = await metadataStore.getItem<string>(`folder_${id}`);
+        return {
+          id,
+          name: customName || id
+        };
+      })
+    );
+    
+    return folders;
   },
 
   getImagesInFolder: async (folderId: string): Promise<LocalImage[]> => {
@@ -81,10 +96,11 @@ export const localBookService = {
     for (const key of folderKeys) {
       const dataUrl = await imagesStore.getItem<string>(key);
       if (dataUrl) {
+        const customName = await metadataStore.getItem<string>(`image_${key}`);
         images.push({
           id: key,
           folderId,
-          name: key,
+          name: customName || key,
           dataUrl,
           createdTime: parseInt(key.split('_')[1] || '0', 10)
         });
@@ -92,6 +108,22 @@ export const localBookService = {
     }
     
     return images.sort((a, b) => b.createdTime - a.createdTime);
+  },
+
+  renameFolder: async (folderId: string, newName: string): Promise<void> => {
+    if (newName.trim()) {
+      await metadataStore.setItem(`folder_${folderId}`, newName.trim());
+    } else {
+      await metadataStore.removeItem(`folder_${folderId}`);
+    }
+  },
+
+  renameImage: async (imageId: string, newName: string): Promise<void> => {
+    if (newName.trim()) {
+      await metadataStore.setItem(`image_${imageId}`, newName.trim());
+    } else {
+      await metadataStore.removeItem(`image_${imageId}`);
+    }
   },
 
   uploadImage: async (file: File, folderId: string): Promise<void> => {
@@ -126,6 +158,7 @@ export const localBookService = {
 
   deleteImage: async (key: string): Promise<void> => {
     await imagesStore.removeItem(key);
+    await metadataStore.removeItem(`image_${key}`);
   },
 
   deleteFolder: async (folderId: string): Promise<void> => {
@@ -133,6 +166,8 @@ export const localBookService = {
     const folderKeys = keys.filter(k => k.startsWith(`${folderId}_`));
     for (const k of folderKeys) {
       await imagesStore.removeItem(k);
+      await metadataStore.removeItem(`image_${k}`);
     }
+    await metadataStore.removeItem(`folder_${folderId}`);
   }
 };

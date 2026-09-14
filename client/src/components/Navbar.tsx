@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AgentAccount } from '../types';
 import { ChitiLogo } from './ChitiLogo';
-import { LogOut, Building, MapPin, Phone, ShieldCheck, ChevronDown, User, Calculator, Download } from 'lucide-react';
+import { LogOut, Building, MapPin, Phone, ShieldCheck, ChevronDown, User, Calculator, Download, Edit3 } from 'lucide-react';
 
 interface NavbarProps {
   agent: AgentAccount;
@@ -9,6 +9,7 @@ interface NavbarProps {
   onNavigateHome: () => void;
   onOpenCalculator?: () => void;
   onOpenInstall?: () => void;
+  onEditProfile?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -16,7 +17,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onLogout,
   onNavigateHome,
   onOpenCalculator,
-  onOpenInstall
+  onOpenInstall,
+  onEditProfile
 }) => {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
@@ -107,21 +109,35 @@ export const Navbar: React.FC<NavbarProps> = ({
               display: 'flex', 
               alignItems: 'center', 
               gap: '8px', 
-              padding: '6px 12px',
+              padding: '4px 12px 4px 6px',
               minHeight: '40px',
               borderRadius: '9999px'
             }}
             aria-label="Agent Profile Menu"
           >
-            <span 
-              style={{ 
-                width: '8px', 
-                height: '8px', 
-                borderRadius: '50%', 
-                backgroundColor: '#10B981', 
-                boxShadow: '0 0 8px #10B981'
-              }} 
-            />
+            {agent.profilePictureUrl ? (
+              <img 
+                src={agent.profilePictureUrl} 
+                alt={agent.name} 
+                style={{ 
+                  width: '26px', 
+                  height: '26px', 
+                  borderRadius: '50%', 
+                  objectFit: 'cover',
+                  border: '1.5px solid #10B981'
+                }} 
+              />
+            ) : (
+              <span 
+                style={{ 
+                  width: '8px', 
+                  height: '8px', 
+                  borderRadius: '50%', 
+                  backgroundColor: '#10B981', 
+                  boxShadow: '0 0 8px #10B981'
+                }} 
+              />
+            )}
             <span style={{ fontWeight: 700, fontSize: '13px', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {agent.name.split(' ')[0]}
             </span>
@@ -152,20 +168,25 @@ export const Navbar: React.FC<NavbarProps> = ({
                 }}
               >
                 <div style={{ paddingBottom: '12px', borderBottom: '1px solid #F1F5F9', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <div 
                       style={{ 
-                        width: '36px', 
-                        height: '36px', 
-                        borderRadius: '10px', 
+                        width: '40px', 
+                        height: '40px', 
+                        borderRadius: '12px', 
                         background: 'rgba(124, 58, 237, 0.1)', 
                         display: 'flex', 
                         alignItems: 'center', 
                         justifyContent: 'center',
-                        color: '#7C3AED'
+                        color: '#7C3AED',
+                        overflow: 'hidden'
                       }}
                     >
-                      <User size={20} />
+                      {agent.profilePictureUrl ? (
+                        <img src={agent.profilePictureUrl} alt={agent.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <User size={22} />
+                      )}
                     </div>
                     <div>
                       <div style={{ fontWeight: 800, fontSize: '15px', color: '#0F172A' }}>{agent.name}</div>
@@ -184,6 +205,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </div>
                 </div>
 
+                {onEditProfile && (
+                  <button 
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      onEditProfile();
+                    }}
+                    className="btn btn-secondary btn-block btn-sm"
+                    style={{ marginBottom: '8px', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                  >
+                    <Edit3 size={14} color="#7C3AED" /> Edit Profile & Password
+                  </button>
+                )}
+
                 {onOpenInstall && (
                   <button 
                     onClick={() => {
@@ -191,7 +225,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       onOpenInstall();
                     }}
                     className="btn btn-primary btn-block btn-sm"
-                    style={{ marginBottom: '10px', fontSize: '13px', fontWeight: 700 }}
+                    style={{ marginBottom: '8px', fontSize: '13px', fontWeight: 700 }}
                   >
                     <Download size={14} /> Install CHITI Mobile App
                   </button>

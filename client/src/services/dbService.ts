@@ -23,13 +23,80 @@ import {
 
 const CURRENT_AGENT_KEY = 'chiti_v1_current_agent_id';
 
+interface CacheEntry<T> {
+  data: T;
+  expiry: number;
+}
+
+class QueryCache {
+  private cache = new Map<string, CacheEntry<any>>();
+  private inFlight = new Map<string, Promise<any>>();
+  private defaultTTL = 45 * 1000; // 45s TTL for high responsiveness
+
+  public async fetch<T>(key: string, fetcher: () => Promise<T>, ttl = this.defaultTTL): Promise<T> {
+    const cached = this.cache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiry > now) {
+      return cached.data as T;
+    }
+
+    if (this.inFlight.has(key)) {
+      return this.inFlight.get(key) as Promise<T>;
+    }
+
+    const promise = fetcher()
+      .then(data => {
+        this.cache.set(key, { data, expiry: Date.now() + ttl });
+        this.inFlight.delete(key);
+        return data;
+      })
+      .catch(err => {
+        this.inFlight.delete(key);
+        throw err;
+      });
+
+    this.inFlight.set(key, promise);
+    return promise;
+  }
+
+  public invalidate(prefixOrKey?: string) {
+    if (!prefixOrKey) {
+      this.cache.clear();
+      return;
+    }
+    for (const key of Array.from(this.cache.keys())) {
+      if (key.startsWith(prefixOrKey) || key.includes(prefixOrKey)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
+  public set<T>(key: string, data: T, ttl = this.defaultTTL) {
+    this.cache.set(key, { data, expiry: Date.now() + ttl });
+  }
+
+  public clear() {
+    this.cache.clear();
+    this.inFlight.clear();
+  }
+}
+
 class DbService {
   private currentAgentId: string | null = null;
+  private cache = new QueryCache();
 
   constructor() {
     if (typeof window !== 'undefined') {
       this.currentAgentId = localStorage.getItem(CURRENT_AGENT_KEY);
     }
+  }
+
+  public clearCache() {
+    this.cache.clear();
+  }
+
+  public invalidateCache(prefix?: string) {
+    this.cache.invalidate(prefix);
   }
 
   // ==========================================
@@ -49,32 +116,23 @@ class DbService {
     if (checkErr) throw checkErr;
     if (existing) throw new Error(`An account with phone number ${data.phone} already exists. Please log in.`);
 
-    const newAgent = {
+    const { data: newAgent, error: insertErr } = await supabase.from('agents').insert({
       name: data.name.trim(),
       phone: data.phone.trim(),
-      email: data.email?.trim(),
-      password: data.password || 'chiti123',
+      email: data.email?.trim() || `${data.phone.trim()}@chitipro.local`,
+      password: data.password || '123456',
       business_name: data.businessName.trim(),
       town: data.town.trim(),
       state: data.state.trim(),
       address: data.address?.trim()
-    };
+    }).select().single();
 
-    const { data: inserted, error: insertErr } = await supabase.from('agents').insert(newAgent).select().single();
     if (insertErr) throw insertErr;
-
-    const agent: AgentAccount = this.mapAgent(inserted);
+    
+    const agent = this.mapAgent(newAgent);
     this.currentAgentId = agent.id;
     localStorage.setItem(CURRENT_AGENT_KEY, agent.id);
-
-    await this.logAudit({
-      agentId: agent.id,
-      actorName: agent.name,
-      action: 'AGENT_REGISTRATION',
-      target: agent.businessName,
-      details: `Agent ${agent.name} registered account for ${agent.businessName} in ${agent.town}`
-    });
-
+    this.cache.invalidate('agent');
     return agent;
   }
 
@@ -95,95 +153,157 @@ class DbService {
     const agent = this.mapAgent(agentData);
     this.currentAgentId = agent.id;
     localStorage.setItem(CURRENT_AGENT_KEY, agent.id);
+    this.cache.invalidate('agent');
     return agent;
   }
 
   public logoutAgent() {
     this.currentAgentId = null;
     localStorage.removeItem(CURRENT_AGENT_KEY);
+    this.cache.clear();
   }
 
-  public async getCurrentAgent(): Promise<AgentAccount | null> {
+  public async getCurrentAgent(forceRefresh = false): Promise<AgentAccount | null> {
     if (!this.currentAgentId) return null;
-    const { data, error } = await supabase.from('agents').select('*').eq('id', this.currentAgentId).maybeSingle();
-    if (error || !data) {
-      this.logoutAgent();
-      return null;
-    }
-    return this.mapAgent(data);
-  }
+    const cacheKey = `agent_${this.currentAgentId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
 
-  // ==========================================
-  // QUERIES
-  // ==========================================
-  public async getChitisByAgent(agentId: string): Promise<Chiti[]> {
-    const { data, error } = await supabase.from('chitis').select(`*, calculation_rules!fk_rule_chiti (*)`).eq('agent_id', agentId).order('created_at', { ascending: false });
-    if (error) throw error;
-    return data.map(this.mapChiti);
-  }
-
-  public async getChitiById(chitiId: string): Promise<Chiti | null> {
-    const { data, error } = await supabase.from('chitis').select(`*, calculation_rules!fk_rule_chiti (*)`).eq('id', chitiId).maybeSingle();
-    if (error) throw error;
-    return data ? this.mapChiti(data) : null;
-  }
-
-  public async getMembersByAgent(agentId: string): Promise<Member[]> {
-    const { data, error } = await supabase.from('members').select('*').eq('agent_id', agentId).order('member_number', { ascending: true });
-    if (error) throw error;
-    return data.map(this.mapMember);
-  }
-
-  public async getChitMembers(chitiId: string): Promise<ChitMember[]> {
-    const { data, error } = await supabase.from('chit_members').select('*').eq('chiti_id', chitiId).order('member_number', { ascending: true });
-    if (error) throw error;
-    return data.map(this.mapChitMember);
-  }
-
-  public async getChitMonths(chitiId: string): Promise<ChitMonth[]> {
-    const { data, error } = await supabase.from('chit_months').select('*').eq('chiti_id', chitiId).order('month_number', { ascending: true });
-    if (error) throw error;
-
-    // Auto-heal: If months are missing or incomplete, automatically create them
-    if (!data || data.length === 0) {
-      const chiti = await this.getChitiById(chitiId);
-      if (chiti && chiti.durationMonths > 0) {
-        const expectedMonthlyPool = chiti.expectedMonthlyPool || (chiti.totalMembers * chiti.monthlyContribution);
-        const missingMonths = Array.from({ length: chiti.durationMonths }, (_, i) => ({
-          chiti_id: chitiId,
-          month_number: i + 1,
-          cycle_date: chiti.startDate,
-          expected_collection: expectedMonthlyPool,
-          pending_collection: expectedMonthlyPool,
-          status: i === 0 ? 'OPEN' : 'UPCOMING'
-        }));
-        await supabase.from('chit_months').insert(missingMonths);
-        const { data: refetched } = await supabase.from('chit_months').select('*').eq('chiti_id', chitiId).order('month_number', { ascending: true });
-        if (refetched) return refetched.map(this.mapChitMonth);
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('agents').select('*').eq('id', this.currentAgentId).maybeSingle();
+      if (error || !data) {
+        this.logoutAgent();
+        return null;
       }
-    }
-
-    return data.map(this.mapChitMonth);
+      return this.mapAgent(data);
+    }, 120 * 1000);
   }
 
-  public async getLoans(chitiId: string): Promise<any[]> {
-    const { data, error } = await supabase.from('loans').select('*').eq('chiti_id', chitiId).order('issued_date', { ascending: false });
-    if (error) throw error;
-    return data;
+  // ==========================================
+  // QUERIES (Accelerated with In-Memory Cache)
+  // ==========================================
+  public async getChitisByAgent(agentId: string, forceRefresh = false): Promise<Chiti[]> {
+    const cacheKey = `chitis_agent_${agentId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('chitis').select(`*, calculation_rules!fk_rule_chiti (*)`).eq('agent_id', agentId).order('created_at', { ascending: false });
+      if (error) throw error;
+      return data.map(this.mapChiti);
+    });
   }
 
-  public async getPaymentsByMonth(chitiId: string, monthNumber: number): Promise<Payment[]> {
-    const { data, error } = await supabase.from('payments').select('*').eq('chiti_id', chitiId).eq('month_number', monthNumber);
-    if (error) throw error;
-    return data.map(this.mapPayment);
+  public async getChitiById(chitiId: string, forceRefresh = false): Promise<Chiti | null> {
+    const cacheKey = `chiti_${chitiId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('chitis').select(`*, calculation_rules!fk_rule_chiti (*)`).eq('id', chitiId).maybeSingle();
+      if (error) throw error;
+      return data ? this.mapChiti(data) : null;
+    });
   }
 
-  public async getLedgerByAgent(agentId: string, chitiId?: string): Promise<LedgerEntry[]> {
-    let query = supabase.from('ledger').select('*').eq('agent_id', agentId).order('date', { ascending: false });
-    if (chitiId) query = query.eq('chiti_id', chitiId);
-    const { data, error } = await query;
-    if (error) throw error;
-    return data.map(this.mapLedger);
+  public async getMembersByAgent(agentId: string, forceRefresh = false): Promise<Member[]> {
+    const cacheKey = `members_agent_${agentId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('members').select('*').eq('agent_id', agentId).order('member_number', { ascending: true });
+      if (error) throw error;
+      return data.map(this.mapMember);
+    });
+  }
+
+  public async getChitMembers(chitiId: string, forceRefresh = false): Promise<ChitMember[]> {
+    const cacheKey = `chit_members_${chitiId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('chit_members').select('*').eq('chiti_id', chitiId).order('member_number', { ascending: true });
+      if (error) throw error;
+      return data.map(this.mapChitMember);
+    });
+  }
+
+  public async getChitMonths(chitiId: string, forceRefresh = false): Promise<ChitMonth[]> {
+    const cacheKey = `chit_months_${chitiId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('chit_months').select('*').eq('chiti_id', chitiId).order('month_number', { ascending: true });
+      if (error) throw error;
+
+      // Auto-heal: If months are missing or incomplete, automatically create them
+      if (!data || data.length === 0) {
+        const chiti = await this.getChitiById(chitiId);
+        if (chiti && chiti.durationMonths > 0) {
+          const expectedMonthlyPool = chiti.expectedMonthlyPool || (chiti.totalMembers * chiti.monthlyContribution);
+          const missingMonths = Array.from({ length: chiti.durationMonths }, (_, i) => ({
+            chiti_id: chitiId,
+            month_number: i + 1,
+            cycle_date: chiti.startDate,
+            expected_collection: expectedMonthlyPool,
+            pending_collection: expectedMonthlyPool,
+            status: i === 0 ? 'OPEN' : 'UPCOMING'
+          }));
+          await supabase.from('chit_months').insert(missingMonths);
+          const { data: refetched } = await supabase.from('chit_months').select('*').eq('chiti_id', chitiId).order('month_number', { ascending: true });
+          if (refetched) return refetched.map(this.mapChitMonth);
+        }
+      }
+
+      return data.map(this.mapChitMonth);
+    });
+  }
+
+  public async getLoans(chitiId: string, forceRefresh = false): Promise<any[]> {
+    const cacheKey = `loans_${chitiId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('loans').select('*').eq('chiti_id', chitiId).order('issued_date', { ascending: false });
+      if (error) throw error;
+      return data;
+    });
+  }
+
+  public async getPaymentsByMonth(chitiId: string, monthNumber: number, forceRefresh = false): Promise<Payment[]> {
+    const cacheKey = `payments_${chitiId}_${monthNumber}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('payments').select('*').eq('chiti_id', chitiId).eq('month_number', monthNumber);
+      if (error) throw error;
+      return data.map(this.mapPayment);
+    });
+  }
+
+  public async getLedgerByAgent(agentId: string, chitiId?: string, forceRefresh = false): Promise<LedgerEntry[]> {
+    const cacheKey = `ledger_${agentId}_${chitiId || 'all'}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      let query = supabase.from('ledger').select('*').eq('agent_id', agentId).order('date', { ascending: false });
+      if (chitiId) query = query.eq('chiti_id', chitiId);
+      const { data, error } = await query;
+      if (error) throw error;
+      return data.map(this.mapLedger);
+    });
+  }
+
+  public async getExtraCommissionsByChiti(chitiId: string, forceRefresh = false): Promise<LedgerEntry[]> {
+    const cacheKey = `commissions_${chitiId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('ledger')
+        .select('*')
+        .eq('chiti_id', chitiId)
+        .eq('type', 'EXTRA_COMMISSION')
+        .order('date', { ascending: false });
+      if (error) throw error;
+      return (data || []).map(this.mapLedger);
+    });
   }
 
   public async getReceiptsByAgent(chitiCode?: string): Promise<Receipt[]> {
@@ -200,13 +320,18 @@ class DbService {
     return data ? this.mapReceipt(data) : null;
   }
 
-  public async getAllPaymentsForChiti(chitiId: string): Promise<Payment[]> {
-    const { data, error } = await supabase.from('payments')
-      .select('*')
-      .eq('chiti_id', chitiId)
-      .neq('status', 'REVERSED');
-    if (error) throw error;
-    return (data || []).map(this.mapPayment);
+  public async getAllPaymentsForChiti(chitiId: string, forceRefresh = false): Promise<Payment[]> {
+    const cacheKey = `all_payments_${chitiId}`;
+    if (forceRefresh) this.cache.invalidate(cacheKey);
+
+    return this.cache.fetch(cacheKey, async () => {
+      const { data, error } = await supabase.from('payments')
+        .select('*')
+        .eq('chiti_id', chitiId)
+        .neq('status', 'REVERSED');
+      if (error) throw error;
+      return (data || []).map(this.mapPayment);
+    });
   }
 
   // ==========================================
@@ -298,6 +423,8 @@ class DbService {
     const { error: moErr } = await supabase.from('chit_months').insert(monthsToInsert);
     if (moErr) throw moErr;
 
+    this.cache.invalidate('chiti');
+    this.cache.invalidate('members');
     return this.getChitiById(chitiId) as Promise<Chiti>;
   }
 
@@ -314,6 +441,7 @@ class DbService {
     // Finally delete the Chiti itself
     const { error } = await supabase.from('chitis').delete().eq('id', chitiId);
     if (error) throw error;
+    this.cache.clear();
   }
 
   public async addMemberToChiti(params: {
@@ -344,6 +472,10 @@ class DbService {
       status: 'ACTIVE'
     }).select().single();
     if (memErr) throw memErr;
+
+    this.cache.invalidate(`chit_members_${params.chitiId}`);
+    this.cache.invalidate(`chiti_${params.chitiId}`);
+    this.cache.invalidate(`members_agent_${params.agentId}`);
 
     // 2. Create ChitMember
     const pendingAmount = chiti.monthlyContribution * chiti.currentMonth;
@@ -521,7 +653,57 @@ class DbService {
       transaction_id: `TXN-${Date.now().toString().slice(-8)}`
     };
 
+    // Auto-advance Chiti current_month and month statuses in background
+    this.syncChitiCurrentMonth(params.chitiId).catch(console.error);
+
+    this.cache.invalidate(`all_payments_${params.chitiId}`);
+    this.cache.invalidate(`payments_${params.chitiId}`);
+    this.cache.invalidate(`ledger_${params.agentId}`);
+    this.cache.invalidate(`chit_months_${params.chitiId}`);
+    this.cache.invalidate(`chit_members_${params.chitiId}`);
+
     return { payment: this.mapPayment(paymentData), receipt: this.mapReceipt(receiptData) };
+  }
+
+  public async syncChitiCurrentMonth(chitiId: string): Promise<number> {
+    const chiti = await this.getChitiById(chitiId);
+    if (!chiti) return 1;
+
+    const { data: months } = await supabase.from('chit_months').select('*').eq('chiti_id', chitiId).order('month_number');
+    if (!months || months.length === 0) return chiti.currentMonth;
+
+    let highestActive = 1;
+    const updates = [];
+
+    for (const m of months) {
+      const isFull = Number(m.expected_collection) > 0 && Number(m.actual_collected) >= Number(m.expected_collection);
+      if (isFull && m.month_number < chiti.durationMonths) {
+        highestActive = Math.max(highestActive, m.month_number + 1);
+        if (m.status !== 'CLOSED') {
+          updates.push(supabase.from('chit_months').update({ status: 'CLOSED' }).eq('id', m.id));
+        }
+      } else if (Number(m.actual_collected) > 0) {
+        highestActive = Math.max(highestActive, m.month_number);
+        if (m.status === 'UPCOMING') {
+          updates.push(supabase.from('chit_months').update({ status: 'OPEN' }).eq('id', m.id));
+        }
+      }
+    }
+
+    const nextM = months.find(m => m.month_number === highestActive);
+    if (nextM && nextM.status === 'UPCOMING') {
+      updates.push(supabase.from('chit_months').update({ status: 'OPEN' }).eq('id', nextM.id));
+    }
+
+    if (highestActive !== chiti.currentMonth) {
+      updates.push(supabase.from('chitis').update({ current_month: highestActive }).eq('id', chitiId));
+    }
+
+    if (updates.length > 0) {
+      await Promise.all(updates);
+    }
+
+    return highestActive;
   }
 
   public async reversePayment(params: {
@@ -580,6 +762,16 @@ class DbService {
     ]);
 
     if (ledgerRes.error) throw ledgerRes.error;
+
+    // Auto-advance Chiti current_month and month statuses in background
+    this.syncChitiCurrentMonth(payment.chiti_id).catch(console.error);
+
+    this.cache.invalidate(`all_payments_${payment.chiti_id}`);
+    this.cache.invalidate(`payments_${payment.chiti_id}`);
+    this.cache.invalidate(`ledger_${params.agentId}`);
+    this.cache.invalidate(`chit_months_${payment.chiti_id}`);
+    this.cache.invalidate(`chit_members_${payment.chiti_id}`);
+
     return this.mapLedger(ledgerRes.data);
   }
 
@@ -683,6 +875,10 @@ class DbService {
       status: 'PAYOUT_PENDING'
     }).eq('id', month.id);
 
+    this.cache.invalidate(`chit_months_${params.chitiId}`);
+    this.cache.invalidate(`ledger_${params.agentId}`);
+    this.cache.invalidate(`chiti_${params.chitiId}`);
+
     return payouts;
   }
 
@@ -702,34 +898,6 @@ class DbService {
     
     const { error } = await supabase.from('loans').update(dbUpdates).eq('id', loanId);
     if (error) throw error;
-  }
-
-  public async getExtraCommissionsByChiti(chitiId: string): Promise<LedgerEntry[]> {
-    const { data, error } = await supabase
-      .from('ledger')
-      .select('*')
-      .eq('chiti_id', chitiId)
-      .eq('type', 'EXTRA_COMMISSION')
-      .order('date', { ascending: false });
-
-    if (error) throw new Error(error.message);
-    return data.map((d: any) => ({
-      id: d.id,
-      agentId: d.agent_id,
-      chitiId: d.chiti_id,
-      monthNumber: d.month_number,
-      memberId: d.member_id,
-      memberName: d.member_name,
-      type: d.type,
-      amount: Number(d.amount),
-      flow: d.flow,
-      runningBalance: Number(d.running_balance),
-      date: d.date,
-      referenceId: d.reference_id,
-      isReversal: d.is_reversal,
-      reversalOfId: d.reversal_of_id,
-      notes: d.notes
-    }));
   }
 
   public async getLoanRepayments(loanId: string): Promise<LoanRepayment[]> {
@@ -877,6 +1045,9 @@ class DbService {
       notes: `Extra Commission: ₹${params.commissionAmount}, Interest: ₹${params.interestAmount} from ${params.memberName}. ${params.notes || ''}`
     });
 
+    this.cache.invalidate(`commissions_${params.chitiId}`);
+    this.cache.invalidate(`ledger_${params.agentId}`);
+
     return true;
   }
 
@@ -912,8 +1083,81 @@ class DbService {
     return true;
   }
 
+  public async updateAgent(agentId: string, updates: {
+    name?: string;
+    phone?: string;
+    businessName?: string;
+    town?: string;
+    state?: string;
+    address?: string;
+    password?: string;
+    profilePictureUrl?: string;
+  }): Promise<AgentAccount> {
+    if (typeof window !== 'undefined' && updates.profilePictureUrl !== undefined) {
+      if (updates.profilePictureUrl) {
+        localStorage.setItem(`agent_avatar_${agentId}`, updates.profilePictureUrl);
+      } else {
+        localStorage.removeItem(`agent_avatar_${agentId}`);
+      }
+    }
+
+    const dbUpdates: any = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name.trim();
+    if (updates.phone !== undefined) dbUpdates.phone = updates.phone.trim();
+    if (updates.businessName !== undefined) dbUpdates.business_name = updates.businessName.trim();
+    if (updates.town !== undefined) dbUpdates.town = updates.town.trim();
+    if (updates.state !== undefined) dbUpdates.state = updates.state.trim();
+    if (updates.address !== undefined) dbUpdates.address = updates.address.trim();
+    if (updates.password !== undefined && updates.password.trim().length > 0) {
+      dbUpdates.password = updates.password;
+    }
+
+    if (Object.keys(dbUpdates).length > 0) {
+      try {
+        const { error } = await supabase.from('agents').update(dbUpdates).eq('id', agentId);
+        if (error) {
+          console.warn('Database agent update warning:', error);
+        }
+      } catch (err) {
+        console.warn('Agent DB update catch:', err);
+      }
+    }
+
+    const { data: refreshed } = await supabase.from('agents').select('*').eq('id', agentId).maybeSingle();
+    this.cache.invalidate('agent');
+    if (refreshed) {
+      return this.mapAgent(refreshed);
+    }
+    return {
+      id: agentId,
+      name: updates.name || '',
+      phone: updates.phone || '',
+      businessName: updates.businessName || '',
+      town: updates.town || '',
+      state: updates.state || '',
+      address: updates.address,
+      profilePictureUrl: updates.profilePictureUrl,
+      createdAt: new Date().toISOString()
+    };
+  }
+
   // Helper mappings
-  private mapAgent(row: any): AgentAccount { return { id: row.id, name: row.name, phone: row.phone, email: row.email, password: row.password, businessName: row.business_name, town: row.town, state: row.state, address: row.address, createdAt: row.created_at }; }
+  private mapAgent(row: any): AgentAccount { 
+    const localAvatar = typeof window !== 'undefined' ? localStorage.getItem(`agent_avatar_${row.id}`) : null;
+    return { 
+      id: row.id, 
+      name: row.name, 
+      phone: row.phone, 
+      email: row.email, 
+      password: row.password, 
+      businessName: row.business_name, 
+      town: row.town, 
+      state: row.state, 
+      address: row.address, 
+      profilePictureUrl: row.avatar_url || localAvatar || undefined,
+      createdAt: row.created_at 
+    }; 
+  }
   private mapChiti = (row: any): Chiti => { const r = row.calculation_rules?.[0] || row.calculation_rules; return { id: row.id, agentId: row.agent_id, code: row.code, name: row.name, totalMembers: row.total_members, monthlyContribution: Number(row.monthly_contribution), expectedMonthlyPool: Number(row.expected_monthly_pool), durationMonths: row.duration_months, currentMonth: row.current_month, startDate: row.start_date, paymentDueDay: row.payment_due_day, status: row.status, notes: row.notes, createdAt: row.created_at, rule: r ? { id: r.id, chitiId: r.chiti_id, version: r.version, effectiveFromMonth: r.effective_from_month || 1, auctionType: r.auction_type, commissionType: r.commission_type, commissionValue: Number(r.commission_value), surplusStrategy: r.surplus_strategy, description: r.description } : {} as CalculationRule }; }
   private mapMember(row: any): Member { return { id: row.id, agentId: row.agent_id, memberNumber: row.member_number, fullName: row.full_name, phone: row.phone, address: row.address, joiningDate: row.joining_date, status: row.status }; }
   private mapChitMember(row: any): ChitMember { return { id: row.id, chitiId: row.chiti_id, memberId: row.member_id, memberNumber: row.member_number, fullName: row.full_name, phone: row.phone, address: row.address, hasWonAuction: row.has_won_auction, wonMonth: row.won_month, winningBidAmount: row.winning_bid_amount ? Number(row.winning_bid_amount) : undefined, payoutAmount: row.payout_amount ? Number(row.payout_amount) : undefined, totalPaid: Number(row.total_paid), pendingAmount: Number(row.pending_amount), status: row.status }; }

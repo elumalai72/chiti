@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { dbService } from '../services/dbService';
 import { Chiti, ChitMember, ChitMonth, Payment } from '../types';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Check, CheckSquare } from 'lucide-react';
 
 interface MasterCollectionSheetProps {
   chiti: Chiti;
@@ -64,6 +64,121 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
   }, [payments]);
 
   const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
+  const [isProcessingBatch, setIsProcessingBatch] = useState<number | null>(null);
+
+  const handleToggleAllPaid = async (monthNum: number) => {
+    if (isProcessingBatch !== null) return;
+    const month = months.find(m => m.monthNumber === monthNum);
+    if (!month) return;
+
+    const totalDueForMonth = chiti.monthlyContribution - ((month as any)?.memberDividendCredit || 0);
+    const unpaidMembers = members.filter(m => {
+      const pData = paymentMap[`${monthNum}_${m.memberId}`];
+      return !pData || pData.totalPaid < totalDueForMonth;
+    });
+
+    const isAllPaid = unpaidMembers.length === 0;
+
+    if (isAllPaid) {
+      // Prompt to unmark all
+      if (!confirm(`All members are already marked paid for Month ${monthNum} (${getCalculatedDate(chiti.startDate, monthNum)}). Do you want to unmark ALL members for this month?`)) {
+        return;
+      }
+      setIsProcessingBatch(monthNum);
+      const previousPayments = [...payments];
+      
+      const recordsToRemove: Payment[] = [];
+      members.forEach(m => {
+        const pData = paymentMap[`${monthNum}_${m.memberId}`];
+        if (pData && pData.records) {
+          recordsToRemove.push(...pData.records);
+        }
+      });
+      const recordIdsToRemove = new Set(recordsToRemove.map(r => r.id));
+
+      // Optimistic removal (0ms UI update)
+      setPayments(prev => prev.filter(p => !recordIdsToRemove.has(p.id)));
+
+      try {
+        await Promise.all(recordsToRemove.map(r => 
+          dbService.reversePayment({
+            agentId: chiti.agentId,
+            paymentId: r.id,
+            reason: `Batch unmark for Month ${monthNum}`
+          })
+        ));
+      } catch (err: any) {
+        setPayments(previousPayments);
+        alert(`Failed to unmark all: ${err.message || 'Error occurred'}`);
+      } finally {
+        setIsProcessingBatch(null);
+      }
+    } else {
+      // Mark all unpaid members as paid
+      if (!confirm(`Mark ALL ${unpaidMembers.length} unpaid members as Paid for Month ${monthNum} (${getCalculatedDate(chiti.startDate, monthNum)})?`)) {
+        return;
+      }
+      setIsProcessingBatch(monthNum);
+
+      const newTempPayments: Payment[] = [];
+      const paymentPromises: Promise<any>[] = [];
+
+      unpaidMembers.forEach(member => {
+        const pData = paymentMap[`${monthNum}_${member.memberId}`] || { totalPaid: 0 };
+        const pendingAmount = Math.max(0, totalDueForMonth - pData.totalPaid);
+        if (pendingAmount <= 0) return;
+
+        const tempId = `temp-batch-${Date.now()}-${member.memberId}-${monthNum}`;
+        const optimisticPayment: Payment = {
+          id: tempId,
+          agentId: chiti.agentId,
+          chitiId: chiti.id,
+          chitMonthId: month.id,
+          monthNumber: monthNum,
+          memberId: member.memberId,
+          memberName: member.fullName,
+          memberNumber: member.memberNumber,
+          amountDue: totalDueForMonth,
+          amountPaid: pendingAmount,
+          paymentDate: new Date().toISOString(),
+          paymentMethod: 'CASH',
+          status: 'PAID',
+          receiptNumber: '',
+          notes: 'Batch Marked via Notebook Sheet'
+        };
+        newTempPayments.push(optimisticPayment);
+
+        paymentPromises.push(
+          dbService.recordPayment({
+            agentId: chiti.agentId,
+            chitiId: chiti.id,
+            chitMonthId: month.id,
+            monthNumber: monthNum,
+            memberId: member.memberId,
+            amountPaid: pendingAmount,
+            paymentMethod: 'CASH',
+            notes: 'Batch Marked via Notebook Sheet'
+          }).then(res => ({ tempId, actualPayment: res.payment }))
+        );
+      });
+
+      // Instant optimistic UI update
+      setPayments(prev => [...prev, ...newTempPayments]);
+
+      try {
+        const results = await Promise.all(paymentPromises);
+        const resultMap = new Map(results.map(r => [r.tempId, r.actualPayment]));
+        setPayments(prev => prev.map(p => resultMap.get(p.id) || p));
+      } catch (err: any) {
+        console.error('Batch payment recording error', err);
+        const fresh = await dbService.getAllPaymentsForChiti(chiti.id);
+        setPayments(fresh);
+        alert(`Some payments may not have saved: ${err.message || 'Error occurred'}`);
+      } finally {
+        setIsProcessingBatch(null);
+      }
+    }
+  };
 
   const handleTogglePayment = async (member: ChitMember, month: ChitMonth) => {
     const key = `${month.monthNumber}_${member.memberId}`;
@@ -220,20 +335,68 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
                   <th style={{ padding: '8px 16px', textAlign: 'left', minWidth: '180px', verticalAlign: 'bottom', borderBottom: '2px solid #1f2937', position: 'sticky', left: 0, background: '#fff', zIndex: 30, borderRight: '2px solid rgba(239, 68, 68, 0.7)' }}>
                     <div style={{ fontSize: '24px', color: '#1f2937', paddingLeft: '8px' }}>Name</div>
                   </th>
-                {Array.from({ length: chiti.durationMonths }, (_, i) => i + 1).map(monthNum => (
-                  <th key={monthNum} style={{ padding: '8px 4px', borderLeft: '1px solid #9ca3af', borderBottom: '2px solid #1f2937', height: '140px', verticalAlign: 'bottom', width: '40px' }}>
-                    <div style={{ 
-                      writingMode: 'vertical-rl', 
-                      transform: 'rotate(180deg)', 
-                      fontSize: '18px', 
-                      color: '#1f2937',
-                      whiteSpace: 'nowrap',
-                      margin: '0 auto'
-                    }}>
-                      {getCalculatedDate(chiti.startDate, monthNum)}
-                    </div>
-                  </th>
-                ))}
+                {Array.from({ length: chiti.durationMonths }, (_, i) => i + 1).map(monthNum => {
+                  const m = months.find(item => item.monthNumber === monthNum);
+                  const totalDueForMonth = chiti.monthlyContribution - ((m as any)?.memberDividendCredit || 0);
+                  const paidCount = members.filter(mem => {
+                    const p = paymentMap[`${monthNum}_${mem.memberId}`];
+                    return p && p.totalPaid >= totalDueForMonth;
+                  }).length;
+                  const isAllPaid = members.length > 0 && paidCount === members.length;
+                  const isBusy = isProcessingBatch === monthNum;
+
+                  return (
+                    <th key={monthNum} style={{ padding: '6px 4px', borderLeft: '1px solid #9ca3af', borderBottom: '2px solid #1f2937', height: '175px', verticalAlign: 'bottom', width: '44px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', gap: '8px' }}>
+                        {/* Clickable Column-wide All Paid Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleAllPaid(monthNum)}
+                          disabled={isBusy}
+                          title={isAllPaid ? `Month ${monthNum}: All paid! Click to unmark all` : `Month ${monthNum}: Click to mark all ${members.length - paidCount} members as paid`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '6px',
+                            border: isAllPaid ? '2px solid #10B981' : '1.5px dashed #64748B',
+                            background: isAllPaid ? '#10B981' : '#F1F5F9',
+                            color: isAllPaid ? '#FFFFFF' : '#0F172A',
+                            cursor: 'pointer',
+                            fontSize: '10px',
+                            fontWeight: 900,
+                            padding: 0,
+                            boxShadow: isAllPaid ? '0 2px 6px rgba(16, 185, 129, 0.35)' : 'none',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          {isBusy ? (
+                            <Loader2 size={14} className="spin" />
+                          ) : isAllPaid ? (
+                            <Check size={16} strokeWidth={3} />
+                          ) : (
+                            <span>ALL</span>
+                          )}
+                        </button>
+
+                        <div style={{ 
+                          writingMode: 'vertical-rl', 
+                          transform: 'rotate(180deg)', 
+                          fontSize: '16px', 
+                          fontWeight: 700,
+                          color: '#1f2937',
+                          whiteSpace: 'nowrap',
+                          margin: '0 auto',
+                          letterSpacing: '0.5px'
+                        }}>
+                          {getCalculatedDate(chiti.startDate, monthNum)}
+                        </div>
+                      </div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
