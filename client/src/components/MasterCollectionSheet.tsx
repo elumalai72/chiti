@@ -23,7 +23,6 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
   const [months, setMonths] = useState<ChitMonth[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isProcessing, setIsProcessing] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   const loadData = async () => {
@@ -64,8 +63,12 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
     return map;
   }, [payments]);
 
+  const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
+
   const handleTogglePayment = async (member: ChitMember, month: ChitMonth) => {
     const key = `${month.monthNumber}_${member.memberId}`;
+    if (pendingKeys.has(key)) return; // Prevent double-tap on same cell
+
     const paymentData = paymentMap[key] || { totalPaid: 0, records: [] };
     const totalDueForMonth = chiti.monthlyContribution - ((month as any).memberDividendCredit || 0);
     const isPaid = paymentData.totalPaid >= totalDueForMonth;
@@ -74,7 +77,7 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
       // Trying to uncheck. Ensure next month is NOT checked.
       const nextMonthKey = `${month.monthNumber + 1}_${member.memberId}`;
       const nextMonthPaymentData = paymentMap[nextMonthKey] || { totalPaid: 0 };
-      const isNextPaid = nextMonthPaymentData.totalPaid > 0; // if they paid anything in next month, can't uncheck this one
+      const isNextPaid = nextMonthPaymentData.totalPaid > 0;
       
       if (isNextPaid) {
         alert(`You must uncheck Month ${month.monthNumber + 1} before unchecking Month ${month.monthNumber}.`);
@@ -82,7 +85,12 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
       }
 
       if (confirm(`Remove payment for ${member.fullName} in Month ${month.monthNumber}?`)) {
-        setIsProcessing(key);
+        // 1. Optimistic removal (Instant 0ms UI update)
+        const previousPayments = [...payments];
+        const recordIds = new Set(paymentData.records.map(r => r.id));
+        setPayments(prev => prev.filter(p => !recordIds.has(p.id)));
+
+        setPendingKeys(prev => new Set(prev).add(key));
         try {
           for (const record of paymentData.records) {
             await dbService.reversePayment({
@@ -91,11 +99,16 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
               reason: 'Notebook toggle unmark'
             });
           }
-          await loadData();
         } catch (err: any) {
-          alert(err.message);
+          // Revert optimistic update on failure
+          setPayments(previousPayments);
+          alert(err.message || 'Failed to remove payment. Reverting.');
         } finally {
-          setIsProcessing(null);
+          setPendingKeys(prev => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
         }
       }
     } else {
@@ -114,9 +127,31 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
       const pendingAmount = Math.max(0, totalDueForMonth - paymentData.totalPaid);
       if (pendingAmount <= 0) return;
 
-      setIsProcessing(key);
+      // 1. Optimistic addition (Instant 0ms UI update)
+      const tempId = `temp-${Date.now()}-${member.memberId}-${month.monthNumber}`;
+      const optimisticPayment: Payment = {
+        id: tempId,
+        agentId: chiti.agentId,
+        chitiId: chiti.id,
+        chitMonthId: month.id,
+        monthNumber: month.monthNumber,
+        memberId: member.memberId,
+        memberName: member.fullName,
+        memberNumber: member.memberNumber,
+        amountDue: totalDueForMonth,
+        amountPaid: pendingAmount,
+        paymentDate: new Date().toISOString(),
+        paymentMethod: 'CASH',
+        status: 'PAID',
+        receiptNumber: '',
+        notes: 'Marked via Notebook Sheet'
+      };
+
+      setPayments(prev => [...prev, optimisticPayment]);
+      setPendingKeys(prev => new Set(prev).add(key));
+
       try {
-        await dbService.recordPayment({
+        const result = await dbService.recordPayment({
           agentId: chiti.agentId,
           chitiId: chiti.id,
           chitMonthId: month.id,
@@ -126,11 +161,18 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
           paymentMethod: 'CASH',
           notes: 'Marked via Notebook Sheet'
         });
-        await loadData();
+        // Replace temp payment with actual database payment
+        setPayments(prev => prev.map(p => p.id === tempId ? result.payment : p));
       } catch (err: any) {
-        alert(err.message);
+        // Revert on failure
+        setPayments(prev => prev.filter(p => p.id !== tempId));
+        alert(err.message || 'Failed to record payment. Please try again.');
       } finally {
-        setIsProcessing(null);
+        setPendingKeys(prev => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
       }
     }
   };
@@ -233,13 +275,13 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
                     const paymentData = paymentMap[key] || { totalPaid: 0, records: [] };
                     const totalDue = chiti.monthlyContribution - (dbMonth ? (dbMonth as any).memberDividendCredit || 0 : 0);
                     const isPaid = paymentData.totalPaid >= totalDue;
-                    const isProcessingThis = isProcessing === key;
+                    const isPendingSync = pendingKeys.has(key);
 
                     return (
                       <td 
                         key={key} 
                         onClick={() => {
-                          if (isProcessingThis) return;
+                          if (isPendingSync) return;
                           if (!dbMonth) {
                             alert(`Month ${monthNum} has not been started in the system yet.`);
                             return;
@@ -254,12 +296,11 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
                           cursor: dbMonth ? 'pointer' : 'not-allowed',
                           height: '40px',
                           verticalAlign: 'middle',
-                          opacity: dbMonth ? 1 : 0.5
+                          opacity: dbMonth ? (isPendingSync ? 0.6 : 1) : 0.5,
+                          transition: 'opacity 0.2s ease'
                         }}
                       >
-                        {isProcessingThis ? (
-                          <Loader2 size={16} className="spin" color="#1f2937" style={{ margin: '0 auto' }} />
-                        ) : isPaid ? (
+                        {isPaid ? (
                           <div style={{ 
                             fontSize: '28px', 
                             color: '#1f2937', 

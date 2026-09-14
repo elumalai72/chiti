@@ -246,6 +246,8 @@ export const App: React.FC = () => {
               onOpenChiti={handleOpenChiti} 
               onOpenCalculator={() => setIsCalculatorOpen(true)}
               onOpenInstall={!isInstalled ? handleOpenInstall : undefined}
+              initialChitis={chitis}
+              initialMembers={allMembers}
             />
           )}
         </main>

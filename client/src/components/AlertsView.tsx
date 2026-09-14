@@ -38,16 +38,20 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
         setUpcomingChitis(upcoming.sort((a, b) => a.days - b.days));
 
         // 2. Unpaid Members (Risk)
-        const unpaid = [];
-        for (const c of chitis) {
+        const membersPerChiti = await Promise.all(chitis.map(async (c) => {
           const members = await dbService.getChitMembers(c.id);
-          for (const m of members) {
+          return { chiti: c, members };
+        }));
+
+        const unpaid = [];
+        for (const item of membersPerChiti) {
+          for (const m of item.members) {
             if (m.pendingAmount > 0) {
               const fullMem = allMembers.find(mem => mem.id === m.memberId);
               if (fullMem) {
                 unpaid.push({
                   member: fullMem,
-                  chitiName: c.name,
+                  chitiName: item.chiti.name,
                   pendingAmount: m.pendingAmount
                 });
               }

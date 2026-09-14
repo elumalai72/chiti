@@ -25,36 +25,42 @@ interface AgentDashboardViewProps {
   onOpenChiti: (chitiId: string) => void;
   onOpenCalculator?: () => void;
   onOpenInstall?: () => void;
+  initialChitis?: Chiti[];
+  initialMembers?: Member[];
 }
 
 export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({ 
   agent, 
   onOpenChiti, 
   onOpenCalculator,
-  onOpenInstall
+  onOpenInstall,
+  initialChitis,
+  initialMembers
 }) => {
   const [isNewChitiOpen, setIsNewChitiOpen] = useState(false);
   const [dataVersion, setDataVersion] = useState(0);
 
-  const [chitis, setChitis] = useState<Chiti[]>([]);
-  const [allMembers, setAllMembers] = useState<Member[]>([]);
+  const [chitis, setChitis] = useState<Chiti[]>(initialChitis || []);
+  const [allMembers, setAllMembers] = useState<Member[]>(initialMembers || []);
   const [chitiMonthsMap, setChitiMonthsMap] = useState<Record<string, ChitMonth[]>>({});
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!initialChitis || initialChitis.length === 0);
 
   useEffect(() => {
     async function loadDashboard() {
-      setIsLoading(true);
+      if (chitis.length === 0) {
+        setIsLoading(true);
+      }
       try {
         const [loadedChitis, loadedMembers] = await Promise.all([
-          dbService.getChitisByAgent(agent.id),
-          dbService.getMembersByAgent(agent.id)
+          initialChitis && initialChitis.length > 0 ? Promise.resolve(initialChitis) : dbService.getChitisByAgent(agent.id),
+          initialMembers && initialMembers.length > 0 ? Promise.resolve(initialMembers) : dbService.getMembersByAgent(agent.id)
         ]);
         
+        const monthsResults = await Promise.all(loadedChitis.map(c => dbService.getChitMonths(c.id)));
         const monthsMap: Record<string, ChitMonth[]> = {};
-        for (const c of loadedChitis) {
-          const months = await dbService.getChitMonths(c.id);
-          monthsMap[c.id] = months;
-        }
+        loadedChitis.forEach((c, idx) => {
+          monthsMap[c.id] = monthsResults[idx];
+        });
 
         setChitis(loadedChitis);
         setAllMembers(loadedMembers);
@@ -66,7 +72,7 @@ export const AgentDashboardView: React.FC<AgentDashboardViewProps> = ({
       }
     }
     loadDashboard();
-  }, [agent.id, dataVersion]);
+  }, [agent.id, dataVersion, initialChitis, initialMembers]);
 
   const totalMonthlyExpected = chitis.reduce((acc, c) => acc + c.expectedMonthlyPool, 0);
   const totalMembersCount = chitis.reduce((acc, c) => acc + c.totalMembers, 0);

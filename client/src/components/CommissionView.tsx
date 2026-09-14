@@ -38,21 +38,30 @@ export const CommissionView: React.FC<CommissionViewProps> = ({ agentId, chitis 
       const commissionsMap: Record<string, LedgerEntry[]> = {};
       const monthsMap: Record<string, ChitMonth[]> = {};
 
-      for (const c of chitis) {
-        const comms = await dbService.getExtraCommissionsByChiti(c.id);
-        commissionsMap[c.id] = comms.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        
-        const months = await dbService.getChitMonths(c.id);
-        monthsMap[c.id] = months;
+      const results = await Promise.all(chitis.map(async (c) => {
+        const [comms, months, members] = await Promise.all([
+          dbService.getExtraCommissionsByChiti(c.id),
+          dbService.getChitMonths(c.id),
+          dbService.getChitMembers(c.id)
+        ]);
+        return {
+          chitiId: c.id,
+          comms: comms.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+          months,
+          members: members.sort((a, b) => a.memberNumber - b.memberNumber)
+        };
+      }));
 
-        const members = await dbService.getChitMembers(c.id);
-        membersMap[c.id] = members.sort((a, b) => a.memberNumber - b.memberNumber);
-        
-        // Initialize default dates
-        if (!sessionDates[c.id]) {
-          setSessionDates(prev => ({ ...prev, [c.id]: new Date().toISOString().split('T')[0] }));
+      const newSessionDates = { ...sessionDates };
+      results.forEach(r => {
+        commissionsMap[r.chitiId] = r.comms;
+        monthsMap[r.chitiId] = r.months;
+        membersMap[r.chitiId] = r.members;
+        if (!newSessionDates[r.chitiId]) {
+          newSessionDates[r.chitiId] = new Date().toISOString().split('T')[0];
         }
-      }
+      });
+      setSessionDates(newSessionDates);
       setChitiMembersMap(membersMap);
       setSavedCommissions(commissionsMap);
       setChitiMonthsMap(monthsMap);

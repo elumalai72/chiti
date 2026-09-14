@@ -382,20 +382,24 @@ class DbService {
     paymentMethod: PaymentMethod;
     notes?: string;
   }): Promise<{ payment: Payment; receipt: Receipt }> {
-    const chiti = await this.getChitiById(params.chitiId);
+    // Stage 1: Fetch prerequisite data in parallel
+    const [chiti, memberRes, agent, existingPaymentRes] = await Promise.all([
+      this.getChitiById(params.chitiId),
+      supabase.from('members').select('*').eq('id', params.memberId).single(),
+      this.getCurrentAgent(),
+      supabase.from('payments')
+        .select('*')
+        .eq('chiti_id', params.chitiId)
+        .eq('month_number', params.monthNumber)
+        .eq('member_id', params.memberId)
+        .maybeSingle()
+    ]);
+
     if (!chiti) throw new Error('Chiti not found');
+    if (memberRes.error || !memberRes.data) throw memberRes.error || new Error('Member not found');
 
-    const { data: member, error: memErr } = await supabase.from('members').select('*').eq('id', params.memberId).single();
-    if (memErr) throw memErr;
-
-    const agent = await this.getCurrentAgent();
-
-    const { data: existingPayment } = await supabase.from('payments')
-      .select('*')
-      .eq('chiti_id', params.chitiId)
-      .eq('month_number', params.monthNumber)
-      .eq('member_id', params.memberId)
-      .maybeSingle();
+    const member = memberRes.data;
+    const existingPayment = existingPaymentRes.data;
 
     const amountDue = chiti.monthlyContribution;
     const isFull = params.amountPaid >= amountDue;
@@ -403,6 +407,7 @@ class DbService {
     const paymentDate = new Date().toISOString();
     const receiptNum = `RCT-${chiti.code}-M${params.monthNumber}-${String(member.member_number).padStart(3, '0')}-${Date.now().toString().slice(-4)}`;
 
+    // Stage 2: Save payment
     let paymentData;
     if (existingPayment) {
       const { data, error } = await supabase.from('payments').update({
@@ -435,59 +440,70 @@ class DbService {
       paymentData = data;
     }
 
-    // Recalculate member total
-    const { data: allPayments } = await supabase.from('payments')
-      .select('amount_paid')
-      .eq('chiti_id', params.chitiId)
-      .eq('member_id', params.memberId)
-      .neq('status', 'REVERSED');
-    
-    const totalPaid = (allPayments || []).reduce((acc, p) => acc + Number(p.amount_paid), 0);
+    // Stage 3: Fetch updated totals in parallel
+    const [allPaymentsRes, monthRes, monthPaymentsRes, lastLedgerRes] = await Promise.all([
+      supabase.from('payments').select('amount_paid').eq('chiti_id', params.chitiId).eq('member_id', params.memberId).neq('status', 'REVERSED'),
+      supabase.from('chit_months').select('*').eq('id', params.chitMonthId).single(),
+      supabase.from('payments').select('amount_paid').eq('chit_month_id', params.chitMonthId).neq('status', 'REVERSED'),
+      supabase.from('ledger').select('running_balance').eq('agent_id', params.agentId).order('date', { ascending: false }).limit(1).maybeSingle()
+    ]);
+
+    const totalPaid = (allPaymentsRes.data || []).reduce((acc, p) => acc + Number(p.amount_paid), 0);
     const pendingAmount = Math.max(0, (chiti.currentMonth * chiti.monthlyContribution) - totalPaid);
 
-    await supabase.from('chit_members').update({
-      total_paid: totalPaid,
-      pending_amount: pendingAmount
-    }).eq('chiti_id', params.chitiId).eq('member_id', params.memberId);
+    const month = monthRes.data;
+    const actualCollected = (monthPaymentsRes.data || []).reduce((acc, p) => acc + Number(p.amount_paid), 0);
+    const pendingCollection = Math.max(0, Number(month?.expected_collection || 0) - actualCollected);
+    const lastRunningBalance = lastLedgerRes.data ? Number(lastLedgerRes.data.running_balance) : 0;
 
-    // Recalculate month total
-    const { data: month, error: monthErr } = await supabase.from('chit_months').select('*').eq('id', params.chitMonthId).single();
-    if (!monthErr) {
-      const { data: monthPayments } = await supabase.from('payments')
-        .select('amount_paid')
-        .eq('chit_month_id', params.chitMonthId)
-        .neq('status', 'REVERSED');
-        
-      const actualCollected = (monthPayments || []).reduce((acc, p) => acc + Number(p.amount_paid), 0);
-      const pendingCollection = Math.max(0, Number(month.expected_collection) - actualCollected);
-      
-      await supabase.from('chit_months').update({
+    // Stage 4: Commit member update, month update, ledger insert, receipt insert in parallel
+    const [,, , receiptRes] = await Promise.all([
+      supabase.from('chit_members').update({
+        total_paid: totalPaid,
+        pending_amount: pendingAmount
+      }).eq('chiti_id', params.chitiId).eq('member_id', params.memberId),
+
+      month ? supabase.from('chit_months').update({
         actual_collected: actualCollected,
         pending_collection: pendingCollection
-      }).eq('id', params.chitMonthId);
-    }
+      }).eq('id', params.chitMonthId) : Promise.resolve(),
 
-    // Ledger
-    const { data: lastLedger } = await supabase.from('ledger').select('running_balance').eq('agent_id', params.agentId).order('date', { ascending: false }).limit(1).maybeSingle();
-    const lastRunningBalance = lastLedger ? Number(lastLedger.running_balance) : 0;
-    
-    await supabase.from('ledger').insert({
-      agent_id: params.agentId,
-      chiti_id: params.chitiId,
-      month_number: params.monthNumber,
-      member_id: params.memberId,
-      member_name: member.full_name,
-      type: status === 'PAID' ? 'MEMBER_PAYMENT' : 'PARTIAL_PAYMENT',
-      amount: params.amountPaid,
-      flow: 'CREDIT',
-      running_balance: lastRunningBalance + params.amountPaid,
-      date: paymentDate,
-      reference_id: paymentData.id,
-      notes: `${status} payment of ₹${params.amountPaid.toLocaleString('en-IN')} received via ${params.paymentMethod} from ${member.full_name}`
-    });
+      supabase.from('ledger').insert({
+        agent_id: params.agentId,
+        chiti_id: params.chitiId,
+        month_number: params.monthNumber,
+        member_id: params.memberId,
+        member_name: member.full_name,
+        type: status === 'PAID' ? 'MEMBER_PAYMENT' : 'PARTIAL_PAYMENT',
+        amount: params.amountPaid,
+        flow: 'CREDIT',
+        running_balance: lastRunningBalance + params.amountPaid,
+        date: paymentDate,
+        reference_id: paymentData.id,
+        notes: `${status} payment of ₹${params.amountPaid.toLocaleString('en-IN')} received via ${params.paymentMethod} from ${member.full_name}`
+      }),
 
-    // Receipt
-    const { data: receiptData, error: recErr } = await supabase.from('receipts').insert({
+      supabase.from('receipts').insert({
+        receipt_number: receiptNum,
+        agent_name: agent?.name || 'Agent',
+        business_name: agent?.businessName || 'Chiti Services',
+        agent_phone: agent?.phone || '',
+        chiti_name: chiti.name,
+        chiti_code: chiti.code,
+        member_name: member.full_name,
+        member_number: member.member_number,
+        month_number: params.monthNumber,
+        amount_due: amountDue,
+        amount_paid: params.amountPaid,
+        remaining_due: Math.max(0, amountDue - params.amountPaid),
+        payment_method: params.paymentMethod,
+        date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        transaction_id: `TXN-${Date.now().toString().slice(-8)}`
+      }).select().single()
+    ]);
+
+    const receiptData = receiptRes.data || {
+      id: receiptNum,
       receipt_number: receiptNum,
       agent_name: agent?.name || 'Agent',
       business_name: agent?.businessName || 'Chiti Services',
@@ -501,10 +517,9 @@ class DbService {
       amount_paid: params.amountPaid,
       remaining_due: Math.max(0, amountDue - params.amountPaid),
       payment_method: params.paymentMethod,
-      date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      date: new Date().toLocaleDateString('en-IN'),
       transaction_id: `TXN-${Date.now().toString().slice(-8)}`
-    }).select().single();
-    if (recErr) throw recErr;
+    };
 
     return { payment: this.mapPayment(paymentData), receipt: this.mapReceipt(receiptData) };
   }
@@ -520,51 +535,52 @@ class DbService {
 
     const reversedAmount = Number(payment.amount_paid);
     
-    await supabase.from('payments').update({
-      status: 'REVERSED',
-      notes: `REVERSED: ${params.reason}`
-    }).eq('id', params.paymentId);
+    // In parallel: update payment status, fetch chit_member, fetch chit_month, and fetch last ledger balance
+    const [, chitMemberRes, chitMonthRes, lastLedgerRes] = await Promise.all([
+      supabase.from('payments').update({
+        status: 'REVERSED',
+        notes: `REVERSED: ${params.reason}`
+      }).eq('id', params.paymentId),
+      supabase.from('chit_members').select('total_paid, pending_amount').eq('chiti_id', payment.chiti_id).eq('member_id', payment.member_id).single(),
+      supabase.from('chit_months').select('actual_collected, pending_collection').eq('id', payment.chit_month_id).single(),
+      supabase.from('ledger').select('running_balance').eq('agent_id', params.agentId).order('date', { ascending: false }).limit(1).maybeSingle()
+    ]);
 
-    // Update chit_members
-    const { data: chitMember } = await supabase.from('chit_members').select('total_paid, pending_amount').eq('chiti_id', payment.chiti_id).eq('member_id', payment.member_id).single();
-    if (chitMember) {
-      await supabase.from('chit_members').update({
+    const chitMember = chitMemberRes.data;
+    const chitMonth = chitMonthRes.data;
+    const lastRunningBalance = lastLedgerRes.data ? Number(lastLedgerRes.data.running_balance) : 0;
+
+    // In parallel: update chit_member, update chit_month, insert ledger reversal
+    const [, , ledgerRes] = await Promise.all([
+      chitMember ? supabase.from('chit_members').update({
         total_paid: Math.max(0, Number(chitMember.total_paid) - reversedAmount),
         pending_amount: Number(chitMember.pending_amount) + reversedAmount
-      }).eq('chiti_id', payment.chiti_id).eq('member_id', payment.member_id);
-    }
+      }).eq('chiti_id', payment.chiti_id).eq('member_id', payment.member_id) : Promise.resolve(),
 
-    // Update chit_months
-    const { data: chitMonth } = await supabase.from('chit_months').select('actual_collected, pending_collection').eq('id', payment.chit_month_id).single();
-    if (chitMonth) {
-      await supabase.from('chit_months').update({
+      chitMonth ? supabase.from('chit_months').update({
         actual_collected: Math.max(0, Number(chitMonth.actual_collected) - reversedAmount),
         pending_collection: Number(chitMonth.pending_collection) + reversedAmount
-      }).eq('id', payment.chit_month_id);
-    }
+      }).eq('id', payment.chit_month_id) : Promise.resolve(),
 
-    // Ledger Reversal
-    const { data: lastLedger } = await supabase.from('ledger').select('running_balance').eq('agent_id', params.agentId).order('date', { ascending: false }).limit(1).maybeSingle();
-    const lastRunningBalance = lastLedger ? Number(lastLedger.running_balance) : 0;
-    
-    const { data: ledgerData, error: ledErr } = await supabase.from('ledger').insert({
-      agent_id: params.agentId,
-      chiti_id: payment.chiti_id,
-      month_number: payment.month_number,
-      member_id: payment.member_id,
-      member_name: payment.member_name,
-      type: 'CORRECTION_REVERSAL',
-      amount: reversedAmount,
-      flow: 'DEBIT',
-      running_balance: lastRunningBalance - reversedAmount,
-      reference_id: payment.id,
-      is_reversal: true,
-      reversal_of_id: payment.id,
-      notes: `Reversal of ₹${reversedAmount.toLocaleString('en-IN')} for ${payment.member_name}. Reason: ${params.reason}`
-    }).select().single();
-    if (ledErr) throw ledErr;
+      supabase.from('ledger').insert({
+        agent_id: params.agentId,
+        chiti_id: payment.chiti_id,
+        month_number: payment.month_number,
+        member_id: payment.member_id,
+        member_name: payment.member_name,
+        type: 'CORRECTION_REVERSAL',
+        amount: reversedAmount,
+        flow: 'DEBIT',
+        running_balance: lastRunningBalance - reversedAmount,
+        reference_id: payment.id,
+        is_reversal: true,
+        reversal_of_id: payment.id,
+        notes: `Reversal of ₹${reversedAmount.toLocaleString('en-IN')} for ${payment.member_name}. Reason: ${params.reason}`
+      }).select().single()
+    ]);
 
-    return this.mapLedger(ledgerData);
+    if (ledgerRes.error) throw ledgerRes.error;
+    return this.mapLedger(ledgerRes.data);
   }
 
   public async confirmAuctionsPayout(params: {
