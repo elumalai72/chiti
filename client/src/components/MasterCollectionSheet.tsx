@@ -1,10 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { dbService } from '../services/dbService';
 import { Chiti, ChitMember, ChitMonth, Payment } from '../types';
-import { Loader2, Check, Trophy, Search, X } from 'lucide-react';
+import { Loader2, Check, Trophy, Search, X, Highlighter, Edit3, Trash2 } from 'lucide-react';
 
 interface MasterCollectionSheetProps {
   chiti: Chiti;
+}
+
+export interface MonthHighlight {
+  monthNumber: number;
+  date: string;
+  title: string;
+  note: string;
+  updatedAt: string;
 }
 
 const getCalculatedDate = (startDate: string, monthNumber: number) => {
@@ -30,6 +38,30 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
   const [isTakenModalOpen, setIsTakenModalOpen] = useState(false);
   const [takenMonthSelect, setTakenMonthSelect] = useState<number>(1);
   const [isSavingTaken, setIsSavingTaken] = useState(false);
+
+  // Month Highlights Feature State (persisted per chiti in localStorage)
+  const [monthHighlights, setMonthHighlights] = useState<Record<number, MonthHighlight>>(() => {
+    try {
+      const saved = localStorage.getItem(`chiti_highlights_${chiti.id}`);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [isHighlightsModalOpen, setIsHighlightsModalOpen] = useState(false);
+  const [activeHighlightMonth, setActiveHighlightMonth] = useState<number | null>(null);
+  const [highlightTitleInput, setHighlightTitleInput] = useState('');
+  const [highlightNoteInput, setHighlightNoteInput] = useState('');
+  const [highlightsViewMode, setHighlightsViewMode] = useState<'single' | 'all'>('single');
+
+  // Persist highlights on change
+  useEffect(() => {
+    try {
+      localStorage.setItem(`chiti_highlights_${chiti.id}`, JSON.stringify(monthHighlights));
+    } catch (e) {
+      console.warn('Failed to persist highlights', e);
+    }
+  }, [monthHighlights, chiti.id]);
 
   const loadData = async () => {
     setIsLoading(true);
@@ -118,6 +150,54 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
       setMembers(freshMembers);
     } finally {
       setIsSavingTaken(false);
+    }
+  };
+
+  const handleOpenMonthHighlight = (monthNum: number) => {
+    setActiveHighlightMonth(monthNum);
+    const existing = monthHighlights[monthNum];
+    setHighlightTitleInput(existing?.title || `Month ${monthNum} Balance / Notes`);
+    setHighlightNoteInput(existing?.note || '');
+    setHighlightsViewMode('single');
+    setIsHighlightsModalOpen(true);
+  };
+
+  const handleOpenAllHighlights = () => {
+    setHighlightsViewMode('all');
+    setIsHighlightsModalOpen(true);
+  };
+
+  const handleSaveHighlight = () => {
+    if (activeHighlightMonth === null) return;
+    const trimmedNote = highlightNoteInput.trim();
+    if (!trimmedNote && !highlightTitleInput.trim()) {
+      handleDeleteHighlight(activeHighlightMonth);
+      return;
+    }
+
+    const updated: MonthHighlight = {
+      monthNumber: activeHighlightMonth,
+      date: getCalculatedDate(chiti.startDate, activeHighlightMonth),
+      title: highlightTitleInput.trim() || `Month ${activeHighlightMonth} Notes`,
+      note: trimmedNote,
+      updatedAt: new Date().toISOString()
+    };
+
+    setMonthHighlights(prev => ({
+      ...prev,
+      [activeHighlightMonth]: updated
+    }));
+    setIsHighlightsModalOpen(false);
+  };
+
+  const handleDeleteHighlight = (monthNum: number) => {
+    setMonthHighlights(prev => {
+      const copy = { ...prev };
+      delete copy[monthNum];
+      return copy;
+    });
+    if (highlightsViewMode === 'single' && activeHighlightMonth === monthNum) {
+      setIsHighlightsModalOpen(false);
     }
   };
 
@@ -416,6 +496,46 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
         >
           <Trophy size={14} /> <span>Mark Taken</span>
         </button>
+
+        <button
+          type="button"
+          onClick={handleOpenAllHighlights}
+          className="btn btn-sm"
+          style={{
+            background: Object.keys(monthHighlights).length > 0
+              ? 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)'
+              : '#F1F5F9',
+            borderColor: Object.keys(monthHighlights).length > 0 ? '#D97706' : '#CBD5E1',
+            color: Object.keys(monthHighlights).length > 0 ? '#FFFFFF' : '#334155',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+            padding: '6px 10px',
+            fontSize: '12px',
+            fontWeight: 700,
+            borderRadius: '8px',
+            boxShadow: Object.keys(monthHighlights).length > 0 ? '0 2px 6px rgba(245, 158, 11, 0.3)' : 'none',
+            flexShrink: 0,
+            minHeight: '34px'
+          }}
+          title="View and edit important notes and pending balance highlights for all months"
+        >
+          <Highlighter size={14} />
+          <span>Highlights</span>
+          {Object.keys(monthHighlights).length > 0 && (
+            <span style={{
+              background: '#FFFFFF',
+              color: '#B45309',
+              fontSize: '10px',
+              fontWeight: 900,
+              padding: '1px 5px',
+              borderRadius: '10px',
+              marginLeft: '2px'
+            }}>
+              {Object.keys(monthHighlights).length}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Legend / Status Sub-bar */}
@@ -427,9 +547,11 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
         background: '#F1F5F9', 
         borderBottom: '1px solid #CBD5E1',
         fontSize: '11px',
-        color: '#64748B'
+        color: '#64748B',
+        flexWrap: 'wrap',
+        gap: '6px'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
             <span style={{ width: '9px', height: '9px', borderRadius: '2px', background: 'rgba(236, 72, 153, 0.25)', border: '1px solid #F472B6' }} />
             <span>Regular</span>
@@ -438,9 +560,34 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
             <span style={{ width: '9px', height: '9px', borderRadius: '2px', background: '#FDE68A', border: '1px solid #F59E0B' }} />
             <span style={{ color: '#92400E', fontWeight: 700 }}>🏆 Taken Chiti</span>
           </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ width: '9px', height: '9px', borderRadius: '2px', background: '#FEF08A', border: '1px solid #EAB308' }} />
+            <span style={{ color: '#854D0E', fontWeight: 600 }}>🖍️ Highlight</span>
+          </span>
         </div>
-        <div style={{ fontWeight: 700, color: '#334155' }}>
-          {takenCount} of {members.length} Taken
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, color: '#334155' }}>
+          <span>{takenCount}/{members.length} Taken</span>
+          <span>•</span>
+          <button 
+            type="button" 
+            onClick={handleOpenAllHighlights} 
+            style={{ 
+              background: 'none', 
+              border: 'none', 
+              color: '#B45309', 
+              cursor: 'pointer', 
+              padding: 0, 
+              fontSize: '11px',
+              fontWeight: 700,
+              textDecoration: 'underline',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+            title="Open highlights summary"
+          >
+            <Highlighter size={12} /> {Object.keys(monthHighlights).length} Highlights
+          </button>
         </div>
       </div>
 
@@ -710,6 +857,119 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
               );
             })}
           </tbody>
+
+          {/* Table Footer: Downside Month Highlights Row */}
+          <tfoot>
+            <tr style={{ background: '#F8FAFC', borderTop: '2px solid #1F2937' }}>
+              {/* Sticky Column Label */}
+              <td style={{
+                padding: '6px 8px',
+                textAlign: 'left',
+                position: 'sticky',
+                left: 0,
+                background: '#F8FAFC',
+                zIndex: 25,
+                borderRight: '2px solid rgba(239, 68, 68, 0.85)',
+                borderBottom: '2px solid #1F2937',
+                boxShadow: '2px 0 5px rgba(0,0,0,0.05)'
+              }}>
+                <button
+                  type="button"
+                  onClick={handleOpenAllHighlights}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    width: '100%',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    padding: 0,
+                    color: '#B45309',
+                    fontFamily: 'sans-serif'
+                  }}
+                  title="View and manage all month highlights"
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 800 }}>
+                    <Highlighter size={12} color="#D97706" /> HIGHLIGHTS
+                  </span>
+                  {Object.keys(monthHighlights).length > 0 && (
+                    <span style={{
+                      background: '#FEF08A',
+                      color: '#854D0E',
+                      border: '1px solid #F59E0B',
+                      fontSize: '9.5px',
+                      fontWeight: 800,
+                      padding: '1px 5px',
+                      borderRadius: '10px'
+                    }}>
+                      {Object.keys(monthHighlights).length}
+                    </span>
+                  )}
+                </button>
+              </td>
+
+              {/* Each Month Downside Highlight Icon Button */}
+              {Array.from({ length: chiti.durationMonths }, (_, i) => i + 1).map(monthNum => {
+                const hl = monthHighlights[monthNum];
+                const hasHighlight = !!hl && (!!hl.note?.trim() || !!hl.title?.trim());
+
+                return (
+                  <td
+                    key={`downside_hl_${monthNum}`}
+                    style={{
+                      padding: '4px 2px',
+                      textAlign: 'center',
+                      verticalAlign: 'middle',
+                      borderBottom: '2px solid #1F2937',
+                      borderLeft: '1px solid #9ca3af',
+                      background: hasHighlight ? '#FEF9C3' : '#F8FAFC'
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleOpenMonthHighlight(monthNum)}
+                      title={hasHighlight 
+                        ? `Month ${monthNum} Highlight: "${hl.title}" - ${hl.note || '(no text)'}\nClick to view, rename, or edit.` 
+                        : `Month ${monthNum}: Click to add highlight note (pending balance, carry-over, auction notes)`}
+                      style={{
+                        position: 'relative',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '30px',
+                        height: '30px',
+                        borderRadius: '6px',
+                        border: hasHighlight ? '1.5px solid #F59E0B' : '1px dashed #CBD5E1',
+                        background: hasHighlight 
+                          ? 'linear-gradient(135deg, #FEF08A 0%, #FDE047 100%)' 
+                          : '#FFFFFF',
+                        color: hasHighlight ? '#854D0E' : '#94A3B8',
+                        cursor: 'pointer',
+                        padding: 0,
+                        transition: 'all 0.15s ease',
+                        boxShadow: hasHighlight ? '0 1px 4px rgba(245, 158, 11, 0.4)' : 'none'
+                      }}
+                    >
+                      <Highlighter size={14} strokeWidth={hasHighlight ? 2.5 : 1.8} />
+                      {hasHighlight && (
+                        <span style={{
+                          position: 'absolute',
+                          top: '-2px',
+                          right: '-2px',
+                          width: '7px',
+                          height: '7px',
+                          background: '#EF4444',
+                          borderRadius: '50%',
+                          border: '1px solid #FFFFFF'
+                        }} />
+                      )}
+                    </button>
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
         </table>
       </div>
 
@@ -964,6 +1224,448 @@ export const MasterCollectionSheet: React.FC<MasterCollectionSheetProps> = ({ ch
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Month Highlights Modal */}
+      {isHighlightsModalOpen && (
+        <div
+          onClick={() => setIsHighlightsModalOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '16px'
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#FFFFFF',
+              borderRadius: '16px',
+              maxWidth: '520px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.08)',
+              border: '1px solid #E2E8F0',
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{
+              padding: '14px 16px',
+              borderBottom: '1px solid #E2E8F0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: '#FFFBEB'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '8px',
+                  background: '#FEF08A',
+                  border: '1.5px solid #F59E0B',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#B45309'
+                }}>
+                  <Highlighter size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#92400E' }}>
+                    {highlightsViewMode === 'single'
+                      ? `Month ${activeHighlightMonth} Highlights`
+                      : 'All Month Highlights'}
+                  </h3>
+                  <div style={{ fontSize: '11px', color: '#B45309', fontWeight: 500 }}>
+                    {highlightsViewMode === 'single' && activeHighlightMonth
+                      ? `Cycle Date: ${getCalculatedDate(chiti.startDate, activeHighlightMonth)}`
+                      : `${Object.keys(monthHighlights).length} active highlights recorded`}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => setHighlightsViewMode(prev => prev === 'single' ? 'all' : 'single')}
+                  style={{
+                    background: '#FFFFFF',
+                    border: '1px solid #FCD34D',
+                    color: '#92400E',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    padding: '4px 8px',
+                    borderRadius: '6px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {highlightsViewMode === 'single' ? 'View All Months' : (activeHighlightMonth ? `Month ${activeHighlightMonth}` : 'Edit Month')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsHighlightsModalOpen(false)}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#94A3B8',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {highlightsViewMode === 'single' ? (
+                <>
+                  {/* Quick Select Month Switcher */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>
+                      Select Month:
+                    </label>
+                    <div style={{
+                      display: 'flex',
+                      gap: '5px',
+                      overflowX: 'auto',
+                      paddingBottom: '4px',
+                      scrollbarWidth: 'thin'
+                    }}>
+                      {Array.from({ length: chiti.durationMonths }, (_, i) => i + 1).map(mNum => {
+                        const isSelected = activeHighlightMonth === mNum;
+                        const hasHl = !!monthHighlights[mNum] && (!!monthHighlights[mNum].note?.trim() || !!monthHighlights[mNum].title?.trim());
+                        return (
+                          <button
+                            key={`tab_m_${mNum}`}
+                            type="button"
+                            onClick={() => handleOpenMonthHighlight(mNum)}
+                            style={{
+                              padding: '5px 9px',
+                              borderRadius: '6px',
+                              border: isSelected ? '1.5px solid #D97706' : (hasHl ? '1px solid #F59E0B' : '1px solid #E2E8F0'),
+                              background: isSelected ? '#FEF3C7' : (hasHl ? '#FFFBEB' : '#FFFFFF'),
+                              color: isSelected ? '#92400E' : (hasHl ? '#B45309' : '#475569'),
+                              fontSize: '11px',
+                              fontWeight: isSelected ? 800 : (hasHl ? 700 : 500),
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}
+                          >
+                            <span>M{mNum}</span>
+                            {hasHl && (
+                              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#EF4444' }} />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Title / Rename Field */}
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <label style={{ fontSize: '11.5px', fontWeight: 700, color: '#475569' }}>
+                        Highlight Title / Rename Label:
+                      </label>
+                      <span style={{ fontSize: '10px', color: '#94A3B8' }}>Click preset or type custom</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={highlightTitleInput}
+                      onChange={e => setHighlightTitleInput(e.target.value)}
+                      placeholder="e.g., Pending Balance, Auction Carry-over"
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: '8px',
+                        border: '1px solid #CBD5E1',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        color: '#1E293B',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+
+                    {/* Quick suggestion tags */}
+                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px' }}>
+                      {[
+                        'Pending Balance',
+                        'Balance for Next Month',
+                        'Auction Remarks',
+                        'Delayed Payment',
+                        'Special Note'
+                      ].map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setHighlightTitleInput(preset)}
+                          style={{
+                            background: '#F1F5F9',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: '12px',
+                            padding: '2px 8px',
+                            fontSize: '10px',
+                            color: '#475569',
+                            cursor: 'pointer',
+                            fontWeight: 600
+                          }}
+                        >
+                          + {preset}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Note / Remarks Textarea */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '11.5px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>
+                      Highlight Information & Details:
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={highlightNoteInput}
+                      onChange={e => setHighlightNoteInput(e.target.value)}
+                      placeholder="Enter important notes, e.g. Ramesh ₹3,000 pending will be paid next month, auction settled with ₹500 discount, etc."
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        borderRadius: '8px',
+                        border: '1px solid #CBD5E1',
+                        fontSize: '12.5px',
+                        color: '#1E293B',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                        lineHeight: '1.4',
+                        resize: 'vertical'
+                      }}
+                    />
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
+                    <button
+                      type="button"
+                      onClick={handleSaveHighlight}
+                      className="btn btn-primary"
+                      style={{
+                        background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
+                        borderColor: '#D97706',
+                        color: '#FFFFFF',
+                        fontWeight: 700,
+                        fontSize: '13px',
+                        padding: '10px',
+                        justifyContent: 'center',
+                        boxShadow: '0 4px 12px rgba(245, 158, 11, 0.3)',
+                        gap: '6px'
+                      }}
+                    >
+                      <Check size={16} /> Save Highlight for Month {activeHighlightMonth}
+                    </button>
+
+                    {activeHighlightMonth && monthHighlights[activeHighlightMonth] && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteHighlight(activeHighlightMonth)}
+                        className="btn btn-secondary"
+                        style={{
+                          color: '#EF4444',
+                          borderColor: '#FCA5A5',
+                          fontSize: '12px',
+                          padding: '8px',
+                          justifyContent: 'center',
+                          gap: '5px'
+                        }}
+                      >
+                        <Trash2 size={14} /> Clear / Delete Month {activeHighlightMonth} Note
+                      </button>
+                    )}
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2px' }}>
+                      <button
+                        type="button"
+                        onClick={handleOpenAllHighlights}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#B45309',
+                          fontSize: '11.5px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          textDecoration: 'underline'
+                        }}
+                      >
+                        View All Month Highlights ({Object.keys(monthHighlights).length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsHighlightsModalOpen(false)}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '12px', padding: '6px 12px' }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                /* All Months Overview Mode */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '6px 10px',
+                    background: '#F8FAFC',
+                    borderRadius: '8px',
+                    border: '1px solid #E2E8F0',
+                    fontSize: '11.5px',
+                    color: '#64748B'
+                  }}>
+                    <span>All {chiti.durationMonths} Months Overview</span>
+                    <span style={{ fontWeight: 700, color: '#B45309' }}>
+                      {Object.keys(monthHighlights).length} Highlighted
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '55vh', overflowY: 'auto' }}>
+                    {Array.from({ length: chiti.durationMonths }, (_, i) => i + 1).map(mNum => {
+                      const hl = monthHighlights[mNum];
+                      const hasHl = !!hl && (!!hl.note?.trim() || !!hl.title?.trim());
+                      const cycleDate = getCalculatedDate(chiti.startDate, mNum);
+
+                      return (
+                        <div
+                          key={`all_m_${mNum}`}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: '10px',
+                            border: hasHl ? '1.5px solid #FCD34D' : '1px solid #E2E8F0',
+                            background: hasHl ? '#FFFBEB' : '#FFFFFF',
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            justifyContent: 'space-between',
+                            gap: '10px',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                              <span style={{
+                                background: hasHl ? '#FEF08A' : '#F1F5F9',
+                                color: hasHl ? '#854D0E' : '#475569',
+                                border: hasHl ? '1px solid #F59E0B' : '1px solid #CBD5E1',
+                                fontSize: '10px',
+                                fontWeight: 800,
+                                padding: '1px 5px',
+                                borderRadius: '4px'
+                              }}>
+                                Month {mNum}
+                              </span>
+                              <span style={{ fontSize: '11px', color: '#64748B' }}>
+                                {cycleDate}
+                              </span>
+                            </div>
+
+                            {hasHl ? (
+                              <div>
+                                <div style={{ fontSize: '12.5px', fontWeight: 800, color: '#92400E', marginBottom: '2px' }}>
+                                  {hl.title}
+                                </div>
+                                {hl.note && (
+                                  <div style={{ fontSize: '12px', color: '#451A03', whiteSpace: 'pre-wrap', lineHeight: '1.3' }}>
+                                    {hl.note}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '11.5px', color: '#94A3B8', fontStyle: 'italic' }}>
+                                No highlights recorded for this month.
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Quick action buttons for this month */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenMonthHighlight(mNum)}
+                              title="Edit / Rename this month note"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                background: hasHl ? '#FEF3C7' : '#F1F5F9',
+                                border: hasHl ? '1px solid #F59E0B' : '1px solid #CBD5E1',
+                                color: hasHl ? '#92400E' : '#475569',
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                padding: '4px 7px',
+                                borderRadius: '6px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <Edit3 size={11} /> {hasHl ? 'Edit / Rename' : '+ Add'}
+                            </button>
+
+                            {hasHl && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteHighlight(mNum)}
+                                title="Delete note"
+                                style={{
+                                  background: '#FEE2E2',
+                                  border: '1px solid #FCA5A5',
+                                  color: '#DC2626',
+                                  padding: '4px 6px',
+                                  borderRadius: '6px',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setIsHighlightsModalOpen(false)}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '12px', padding: '6px 14px' }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
