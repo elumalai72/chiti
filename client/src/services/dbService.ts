@@ -882,6 +882,25 @@ class DbService {
     return payouts;
   }
 
+  public async updateChitMemberTakenStatus(params: {
+    chitiId: string;
+    memberId: string;
+    hasTaken: boolean;
+    wonMonth?: number | null;
+  }): Promise<boolean> {
+    const { error } = await supabase.from('chit_members').update({
+      has_won_auction: params.hasTaken,
+      won_month: params.hasTaken ? (params.wonMonth ?? 1) : null
+    }).eq('chiti_id', params.chitiId).eq('member_id', params.memberId);
+
+    if (error) {
+      console.error('Failed to update chit member taken status', error);
+      throw error;
+    }
+    this.cache.invalidate(`chit_members_${params.chitiId}`);
+    return true;
+  }
+
   public async getLoansByChiti(chitiId: string): Promise<Loan[]> {
     const { data, error } = await supabase.from('loans').select('*').eq('chiti_id', chitiId).order('issued_date', { ascending: false });
     if (error) throw error;

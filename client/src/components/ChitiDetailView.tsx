@@ -49,20 +49,33 @@ export const ChitiDetailView: React.FC<ChitiDetailViewProps> = ({ chitiId, onBac
 
 
   return (
-    <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '16px 16px 40px', width: '100%' }}>
+    <div style={{ width: '100%', maxWidth: '100%', margin: '0 auto', padding: '0 0 40px' }}>
       {/* Top Header / Back CTA */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', gap: '10px' }}>
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'space-between', 
+        padding: '12px 14px', 
+        gap: '10px',
+        background: '#FFFFFF',
+        borderBottom: '1px solid #E2E8F0',
+        position: 'sticky',
+        top: 0,
+        zIndex: 40
+      }}>
         <button 
           onClick={onBack}
           className="btn btn-secondary btn-sm"
-          style={{ gap: '6px', padding: '8px 14px', minHeight: '40px' }}
+          style={{ gap: '6px', padding: '6px 12px', minHeight: '36px', fontSize: '13px' }}
         >
-          <ArrowLeft size={16} /> <span>Back</span>
+          <ArrowLeft size={15} /> <span>Back</span>
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <h2 style={{ fontSize: '18px', fontWeight: 800, margin: 0 }}>{chiti.name}</h2>
-          <span className="badge badge-violet" style={{ fontSize: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+          <h2 style={{ fontSize: '16px', fontWeight: 800, margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {chiti.name}
+          </h2>
+          <span className="badge badge-violet" style={{ fontSize: '11px', flexShrink: 0 }}>
             {chiti.code}
           </span>
         </div>
