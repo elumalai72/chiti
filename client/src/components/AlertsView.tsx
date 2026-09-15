@@ -17,7 +17,8 @@ import {
   Search, 
   FileText, 
   DollarSign, 
-  Loader2 
+  Loader2,
+  Users
 } from 'lucide-react';
 
 interface AlertsViewProps {
@@ -29,6 +30,7 @@ interface AlertsViewProps {
 interface JamiliRow {
   id: string;
   memberName: string;
+  jamiliName?: string;
   commission: number;
   interest: number;
   ticked: boolean;
@@ -43,18 +45,35 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
   const [unpaidMembers, setUnpaidMembers] = useState<any[]>([]);
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
 
-  // Commission Jamili State
+  // Commission State with LocalStorage Persistence
   const [selectedChitiId, setSelectedChitiId] = useState<string>(chitis[0]?.id || '');
   const [collectionDate, setCollectionDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [selectedMonthNum, setSelectedMonthNum] = useState<number>(1);
-  const [jamiliRows, setJamiliRows] = useState<Record<string, JamiliRow[]>>({});
+  const [jamiliRows, setJamiliRows] = useState<Record<string, JamiliRow[]>>(() => {
+    try {
+      const saved = localStorage.getItem('chiti_commission_draft_rows');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
   const [savedHistory, setSavedHistory] = useState<Record<string, LedgerEntry[]>>({});
   const [enrolledMembers, setEnrolledMembers] = useState<Record<string, ChitMember[]>>({});
   const [isLoadingCommission, setIsLoadingCommission] = useState(false);
   const [isFinishing, setIsFinishing] = useState(false);
 
+  // Save draft rows to localStorage on change
+  useEffect(() => {
+    try {
+      localStorage.setItem('chiti_commission_draft_rows', JSON.stringify(jamiliRows));
+    } catch (e) {
+      console.warn('Failed to save draft commission rows to localStorage', e);
+    }
+  }, [jamiliRows]);
+
   // Form Inputs
   const [inputName, setInputName] = useState('');
+  const [inputJamili, setInputJamili] = useState('');
   const [inputCommission, setInputCommission] = useState('');
   const [inputInterest, setInputInterest] = useState('');
 
@@ -139,7 +158,47 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
   const activeHistory = (selectedChitiId && savedHistory[selectedChitiId]) || [];
   const currentMembers = (selectedChitiId && enrolledMembers[selectedChitiId]) || [];
 
-  // Add Member to Jamili Table
+  // Auto-populate all enrolled members into Commission table
+  const handleLoadEnrolledMembers = () => {
+    if (!currentChiti || currentMembers.length === 0) {
+      alert('No enrolled members found for this Chiti group.');
+      return;
+    }
+
+    const defaultComm = currentChiti.rule?.commissionType === 'FIXED' 
+      ? Number(currentChiti.rule.commissionValue) || 4000 
+      : 4000;
+    const defaultInt = 200;
+
+    const existingNames = new Set((activeRows || []).map(r => r.memberName.toLowerCase()));
+    const newRowsToAdd: JamiliRow[] = [];
+
+    currentMembers.forEach(m => {
+      if (!existingNames.has(m.fullName.toLowerCase())) {
+        newRowsToAdd.push({
+          id: `comm-${Date.now()}-${m.id}-${Math.random().toString(36).substring(4)}`,
+          memberName: m.fullName,
+          jamiliName: '',
+          commission: defaultComm,
+          interest: defaultInt,
+          ticked: true,
+          date: collectionDate
+        });
+      }
+    });
+
+    if (newRowsToAdd.length === 0) {
+      alert('All enrolled members are already in the table.');
+      return;
+    }
+
+    setJamiliRows(prev => ({
+      ...prev,
+      [selectedChitiId]: [...(prev[selectedChitiId] || []), ...newRowsToAdd]
+    }));
+  };
+
+  // Add Member to Commission Table
   const handleAddMemberRow = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputName.trim()) {
@@ -155,8 +214,9 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
     }
 
     const newRow: JamiliRow = {
-      id: `jamili-${Date.now()}-${Math.random().toString(36).substring(4)}`,
+      id: `comm-${Date.now()}-${Math.random().toString(36).substring(4)}`,
       memberName: inputName.trim(),
+      jamiliName: inputJamili.trim(),
       commission: comm,
       interest: intVal,
       ticked: true, // ticked by default on adding
@@ -169,8 +229,19 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
     }));
 
     setInputName('');
+    setInputJamili('');
     setInputCommission('');
     setInputInterest('');
+  };
+
+  // Update Jamili Name for an individual row
+  const handleUpdateJamili = (rowId: string, newJamiliName: string) => {
+    setJamiliRows(prev => ({
+      ...prev,
+      [selectedChitiId]: (prev[selectedChitiId] || []).map(r => 
+        r.id === rowId ? { ...r, jamiliName: newJamiliName } : r
+      )
+    }));
   };
 
   // Toggle Tick Mark for a Member Row
@@ -217,6 +288,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
       await Promise.all(tickedRows.map(row => {
         const matched = currentMembers.find(m => m.fullName.toLowerCase() === row.memberName.toLowerCase());
         const memberId = matched ? matched.memberId : '00000000-0000-0000-0000-000000000000';
+        const jamiliPart = row.jamiliName ? `Jamili: ${row.jamiliName}. ` : '';
 
         return dbService.recordExtraCommission({
           agentId,
@@ -226,7 +298,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
           memberName: row.memberName,
           commissionAmount: row.commission,
           interestAmount: row.interest,
-          notes: `Date: ${row.date || collectionDate}. Jamili settlement.`
+          notes: `Date: ${row.date || collectionDate}. ${jamiliPart}Commission settlement.`
         });
       }));
 
@@ -254,18 +326,18 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
   const grandTotal = totalCommAmt + totalIntAmt;
 
   return (
-    <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '16px 16px 40px', width: '100%' }}>
+    <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '10px 8px 60px', width: '100%' }}>
       {/* Top Header & Tab Switcher */}
-      <div style={{ marginBottom: '20px' }}>
+      <div style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
           <div>
-            <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+            <h1 style={{ fontSize: '22px', fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
               {activeTab === 'commission' ? <Award color="#7C3AED" /> : <Bell color="#F59E0B" />}
-              {activeTab === 'commission' ? 'Commission Jamili' : 'Payment Due & Risk Alerts'}
+              {activeTab === 'commission' ? 'Commission Ledger' : 'Payment Due & Risk Alerts'}
             </h1>
-            <p style={{ fontSize: '13px', color: '#64748B', marginTop: '4px', margin: 0 }}>
+            <p style={{ fontSize: '13px', color: '#64748B', marginTop: '3px', margin: 0 }}>
               {activeTab === 'commission' 
-                ? 'Sticky-notes style manual commission & interest ledger table'
+                ? 'Manual commission & interest ledger table with Jamili tracking'
                 : 'Monitor upcoming Chiti due dates and unpaid member risks'}
             </p>
           </div>
@@ -275,7 +347,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
             <button
               onClick={() => setActiveTab('commission')}
               style={{
-                padding: '8px 16px',
+                padding: '7px 14px',
                 borderRadius: '10px',
                 fontSize: '13px',
                 fontWeight: 700,
@@ -289,12 +361,12 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                 transition: 'all 0.2s ease'
               }}
             >
-              <Award size={15} /> Commission Jamili
+              <Award size={15} /> Commission
             </button>
             <button
               onClick={() => setActiveTab('alerts')}
               style={{
-                padding: '8px 16px',
+                padding: '7px 14px',
                 borderRadius: '10px',
                 fontSize: '13px',
                 fontWeight: 700,
@@ -314,26 +386,26 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
         </div>
       </div>
 
-      {/* TAB 1: COMMISSION JAMILI (STICKY NOTES TABLE STYLE) */}
+      {/* TAB 1: COMMISSION (NOTEBOOK TABLE STYLE WITH STICKY COLUMN) */}
       {activeTab === 'commission' ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           
           {/* Chiti Selector & Date Configuration Strip */}
           <div 
             className="card" 
             style={{ 
-              padding: '16px 20px', 
-              borderRadius: '18px', 
+              padding: '14px 16px', 
+              borderRadius: '16px', 
               background: '#FFFFFF',
               border: '1px solid #E2E8F0',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
               flexWrap: 'wrap',
-              gap: '14px'
+              gap: '12px'
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', flex: 1 }}>
               <div>
                 <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', marginBottom: '4px' }}>
                   Select Chiti Group
@@ -342,16 +414,16 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                   value={selectedChitiId}
                   onChange={e => setSelectedChitiId(e.target.value)}
                   style={{
-                    padding: '8px 14px',
+                    padding: '8px 12px',
                     borderRadius: '10px',
                     border: '1px solid #CBD5E1',
-                    fontSize: '14px',
+                    fontSize: '13.5px',
                     fontWeight: 700,
                     color: '#0F172A',
                     background: '#F8FAFC',
                     outline: 'none',
                     cursor: 'pointer',
-                    minWidth: '220px'
+                    maxWidth: '240px'
                   }}
                 >
                   {chitis.map(c => (
@@ -373,7 +445,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                     value={collectionDate}
                     onChange={e => setCollectionDate(e.target.value)}
                     style={{
-                      padding: '7px 12px',
+                      padding: '6px 10px',
                       borderRadius: '10px',
                       border: '1px solid #CBD5E1',
                       fontSize: '13px',
@@ -393,7 +465,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                     value={selectedMonthNum}
                     onChange={e => setSelectedMonthNum(Number(e.target.value))}
                     style={{
-                      padding: '8px 12px',
+                      padding: '7px 10px',
                       borderRadius: '10px',
                       border: '1px solid #CBD5E1',
                       fontSize: '13px',
@@ -412,11 +484,17 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
             </div>
 
             {currentChiti && (
-              <div style={{ textAlign: 'right' }}>
-                <span className="badge badge-primary" style={{ background: '#7C3AED', color: '#FFF', fontSize: '11px' }}>
-                  {currentChiti.totalMembers} Enrolled Members
-                </span>
-                <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handleLoadEnrolledMembers}
+                  className="btn btn-secondary btn-sm"
+                  style={{ gap: '6px', fontSize: '12px', padding: '6px 12px', background: '#F3E8FF', borderColor: '#D8B4FE', color: '#6B21A8', fontWeight: 700 }}
+                  title="Auto-fill all enrolled members of this chiti into the table"
+                >
+                  <Users size={14} /> Load All ({currentChiti.totalMembers})
+                </button>
+                <div style={{ fontSize: '12px', color: '#64748B' }}>
                   Fixed Comm: {currentChiti.rule?.commissionType === 'FIXED' ? formatINR(currentChiti.rule.commissionValue) : `${currentChiti.rule?.commissionValue || 0}%`}
                 </div>
               </div>
@@ -432,60 +510,73 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
             ))}
           </datalist>
 
-          {/* Manual Member Entry Form */}
+          {/* Manual Member Entry Form with Jamili Field */}
           <div 
             className="card"
             style={{
-              padding: '18px 20px',
-              borderRadius: '18px',
+              padding: '16px',
+              borderRadius: '16px',
               border: '1px solid #E2E8F0',
               background: '#FFFFFF'
             }}
           >
-            <div style={{ fontSize: '15px', fontWeight: 800, color: '#0F172A', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Plus size={18} color="#7C3AED" /> Add Member Manually to Jamili Table
+            <div style={{ fontSize: '14px', fontWeight: 800, color: '#0F172A', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Plus size={16} color="#7C3AED" /> Add Member Manually to Commission Table
             </div>
 
-            <form onSubmit={handleAddMemberRow} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', alignItems: 'flex-end' }}>
+            <form onSubmit={handleAddMemberRow} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px', alignItems: 'flex-end' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '3px' }}>
                   Member Name *
                 </label>
                 <input
                   type="text"
                   value={inputName}
                   onChange={e => setInputName(e.target.value)}
-                  placeholder="Select or enter member name..."
+                  placeholder="Member name..."
                   list="jamili-enrolled-members"
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   required
                 />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>
-                  Commission Amount (₹) *
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '3px' }}>
+                  Jamili (Guarantor)
+                </label>
+                <input
+                  type="text"
+                  value={inputJamili}
+                  onChange={e => setInputJamili(e.target.value)}
+                  placeholder="Jamili name (optional)..."
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '3px' }}>
+                  Commission (₹) *
                 </label>
                 <input
                   type="number"
                   value={inputCommission}
                   onChange={e => setInputCommission(e.target.value)}
-                  placeholder="e.g. 500"
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  placeholder="e.g. 4000"
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   min="0"
                 />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>
-                  Interest Amount (₹)
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '3px' }}>
+                  Interest (₹)
                 </label>
                 <input
                   type="number"
                   value={inputInterest}
                   onChange={e => setInputInterest(e.target.value)}
-                  placeholder="e.g. 200 (optional)"
-                  style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid #CBD5E1', fontSize: '13px' }}
+                  placeholder="e.g. 200"
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #CBD5E1', fontSize: '13px' }}
                   min="0"
                 />
               </div>
@@ -494,32 +585,33 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  style={{ width: '100%', padding: '10px 18px', fontSize: '13px', fontWeight: 800, background: '#7C3AED', gap: '6px' }}
+                  style={{ width: '100%', padding: '9px 14px', fontSize: '13px', fontWeight: 800, background: '#7C3AED', gap: '6px', minHeight: '38px' }}
                 >
-                  <Plus size={16} /> Add to Jamili
+                  <Plus size={16} /> Add to Commission
                 </button>
               </div>
             </form>
           </div>
 
-          {/* STICKY NOTES / NOTEBOOK JAMILI TABLE */}
+          {/* STICKY NOTES / NOTEBOOK COMMISSION TABLE WITH STICKY MEMBER COLUMN */}
           <div 
             style={{
-              background: '#FFFDF0', // Sticky notes / ruled paper cream tone
+              background: '#FFFDF0', // Cream tone
               border: '2px solid #FDE047',
-              borderRadius: '20px',
-              padding: '20px',
-              boxShadow: '0 8px 24px rgba(234, 179, 8, 0.15)',
-              position: 'relative'
+              borderRadius: '16px',
+              padding: '14px 10px',
+              boxShadow: '0 6px 20px rgba(234, 179, 8, 0.12)',
+              position: 'relative',
+              width: '100%'
             }}
           >
-            {/* Header banner resembling yellow sticky note header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', borderBottom: '2px dashed #FDE047', paddingBottom: '14px', marginBottom: '16px' }}>
+            {/* Header banner */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', borderBottom: '2px dashed #FDE047', paddingBottom: '10px', marginBottom: '12px' }}>
               <div>
                 <div style={{ display: 'inline-block', background: '#FEF08A', color: '#854D0E', fontSize: '11px', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  📝 Sticky-Notes Jamili Sheet
+                  📝 Commission Sheet
                 </div>
-                <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#713F12', margin: '4px 0 0' }}>
+                <h2 style={{ fontSize: '17px', fontWeight: 800, color: '#713F12', margin: '4px 0 0' }}>
                   {currentChiti?.name} • Month {selectedMonthNum} ({collectionDate})
                 </h2>
               </div>
@@ -536,7 +628,7 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                       }));
                     }}
                     className="btn btn-secondary btn-sm"
-                    style={{ fontSize: '11px', background: '#FEF08A', borderColor: '#FACC15', color: '#713F12', fontWeight: 700 }}
+                    style={{ fontSize: '11px', background: '#FEF08A', borderColor: '#FACC15', color: '#713F12', fontWeight: 700, padding: '4px 10px' }}
                   >
                     {activeRows.every(r => r.ticked) ? 'Untick All' : 'Tick All ✓'}
                   </button>
@@ -546,93 +638,207 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
 
             {/* Table Content */}
             {activeRows.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '40px 20px', color: '#A16207' }}>
-                <FileText size={40} color="#CA8A04" style={{ margin: '0 auto 10px' }} />
-                <div style={{ fontWeight: 800, fontSize: '16px', color: '#713F12' }}>
-                  Jamili Sheet is Empty
+              <div style={{ textAlign: 'center', padding: '36px 16px', color: '#A16207' }}>
+                <FileText size={36} color="#CA8A04" style={{ margin: '0 auto 8px' }} />
+                <div style={{ fontWeight: 800, fontSize: '15px', color: '#713F12' }}>
+                  Commission Sheet is Empty
                 </div>
-                <p style={{ fontSize: '13px', margin: '6px auto 0', maxWidth: '360px' }}>
-                  Add members above to track collected commission and interest for {currentChiti?.name}.
+                <p style={{ fontSize: '12.5px', margin: '4px auto 14px', maxWidth: '340px' }}>
+                  Add members above or click below to load all enrolled members of {currentChiti?.name}.
                 </p>
+                <button
+                  type="button"
+                  onClick={handleLoadEnrolledMembers}
+                  className="btn btn-primary btn-sm"
+                  style={{ background: '#7C3AED', gap: '6px', padding: '8px 16px' }}
+                >
+                  <Users size={14} /> Load All {currentChiti?.totalMembers} Enrolled Members
+                </button>
               </div>
             ) : (
               <div>
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                {/* Horizontal scroll wrapper for table */}
+                <div style={{ overflowX: 'auto', position: 'relative', width: '100%', WebkitOverflowScrolling: 'touch' }}>
+                  <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '13px' }}>
                     <thead>
                       <tr style={{ borderBottom: '2px solid #CA8A04', color: '#713F12', textAlign: 'left' }}>
-                        <th style={{ padding: '10px 8px', width: '36px' }}>#</th>
-                        <th style={{ padding: '10px 12px' }}>Member Name</th>
-                        <th style={{ padding: '10px 12px' }}>Date</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Commission</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Interest</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'right' }}>Total</th>
-                        <th style={{ padding: '10px 12px', textAlign: 'center', width: '100px' }}>Tick Mark</th>
-                        <th style={{ padding: '10px 8px', textAlign: 'center', width: '40px' }}></th>
+                        {/* Sticky Member Name Column Header */}
+                        <th style={{ 
+                          padding: '8px 8px', 
+                          position: 'sticky', 
+                          left: 0, 
+                          background: '#FFFDF0', 
+                          zIndex: 25, 
+                          borderRight: '2px solid rgba(202, 138, 4, 0.8)',
+                          borderBottom: '2px solid #CA8A04',
+                          minWidth: '135px',
+                          maxWidth: '155px',
+                          width: '145px'
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                              Member Name
+                            </span>
+                            <span style={{ fontSize: '10px', color: '#854D0E', fontWeight: 600 }}>
+                              ({activeRows.length})
+                            </span>
+                          </div>
+                        </th>
+
+                        {/* Jamili (Guarantor) Column */}
+                        <th style={{ padding: '8px 8px', minWidth: '115px', borderBottom: '2px solid #CA8A04', fontSize: '12px', fontWeight: 800 }}>
+                          Jamili
+                        </th>
+
+                        {/* Date */}
+                        <th style={{ padding: '8px 6px', minWidth: '80px', borderBottom: '2px solid #CA8A04', fontSize: '12px', fontWeight: 800 }}>
+                          Date
+                        </th>
+
+                        {/* Commission */}
+                        <th style={{ padding: '8px 8px', textAlign: 'right', minWidth: '90px', borderBottom: '2px solid #CA8A04', fontSize: '12px', fontWeight: 800 }}>
+                          Commission
+                        </th>
+
+                        {/* Interest */}
+                        <th style={{ padding: '8px 8px', textAlign: 'right', minWidth: '80px', borderBottom: '2px solid #CA8A04', fontSize: '12px', fontWeight: 800 }}>
+                          Interest
+                        </th>
+
+                        {/* Total */}
+                        <th style={{ padding: '8px 8px', textAlign: 'right', minWidth: '90px', borderBottom: '2px solid #CA8A04', fontSize: '12px', fontWeight: 800 }}>
+                          Total
+                        </th>
+
+                        {/* Tick Mark */}
+                        <th style={{ padding: '8px 6px', textAlign: 'center', minWidth: '60px', width: '65px', borderBottom: '2px solid #CA8A04', fontSize: '12px', fontWeight: 800 }}>
+                          Tick
+                        </th>
+
+                        {/* Delete */}
+                        <th style={{ padding: '8px 4px', textAlign: 'center', width: '32px', borderBottom: '2px solid #CA8A04' }}></th>
                       </tr>
                     </thead>
                     <tbody>
                       {activeRows.map((row, idx) => {
                         const rowTotal = row.commission + row.interest;
+                        const isRowTicked = row.ticked;
+
                         return (
                           <tr 
                             key={row.id} 
                             style={{ 
                               borderBottom: '1px solid #FEF08A',
-                              background: row.ticked ? 'rgba(254, 240, 138, 0.4)' : 'transparent',
+                              background: isRowTicked ? 'rgba(254, 240, 138, 0.45)' : 'transparent',
                               transition: 'background 0.15s ease'
                             }}
                           >
-                            <td style={{ padding: '10px 8px', color: '#854D0E', fontWeight: 700 }}>
-                              {idx + 1}
+                            {/* Sticky Member Name Cell - stays pinned during horizontal scroll */}
+                            <td style={{ 
+                              padding: '5px 8px', 
+                              position: 'sticky', 
+                              left: 0, 
+                              background: isRowTicked ? '#FEF7CD' : '#FFFDF0', 
+                              zIndex: 20, 
+                              borderRight: '2px solid rgba(202, 138, 4, 0.8)', // Dividing line
+                              borderBottom: '1px solid #FEF08A',
+                              fontWeight: 700, 
+                              color: '#713F12',
+                              fontSize: '12px',
+                              verticalAlign: 'middle'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', overflow: 'hidden' }}>
+                                <span style={{ fontSize: '11px', color: '#854D0E', fontWeight: 700, width: '18px', flexShrink: 0, textAlign: 'right' }}>
+                                  {idx + 1}
+                                </span>
+                                <span style={{ 
+                                  overflow: 'hidden', 
+                                  textOverflow: 'ellipsis', 
+                                  whiteSpace: 'nowrap',
+                                  flex: 1,
+                                  minWidth: 0
+                                }} title={row.memberName}>
+                                  {row.memberName}
+                                </span>
+                              </div>
                             </td>
-                            <td style={{ padding: '10px 12px', fontWeight: 700, color: '#713F12' }}>
-                              {row.memberName}
+
+                            {/* Jamili Name Column Cell - with direct manual edit input */}
+                            <td style={{ padding: '4px 6px', borderBottom: '1px solid #FEF08A', verticalAlign: 'middle' }}>
+                              <input 
+                                type="text"
+                                value={row.jamiliName || ''}
+                                onChange={(e) => handleUpdateJamili(row.id, e.target.value)}
+                                placeholder="Enter Jamili..."
+                                style={{
+                                  width: '100%',
+                                  padding: '4px 6px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #FDE047',
+                                  background: '#FFFFFF',
+                                  fontSize: '11.5px',
+                                  fontWeight: 600,
+                                  color: '#713F12',
+                                  outline: 'none'
+                                }}
+                              />
                             </td>
-                            <td style={{ padding: '10px 12px', color: '#A16207', fontSize: '12px' }}>
+
+                            {/* Date */}
+                            <td style={{ padding: '5px 6px', color: '#854D0E', fontSize: '11.5px', whiteSpace: 'nowrap', borderBottom: '1px solid #FEF08A', verticalAlign: 'middle' }}>
                               {row.date || collectionDate}
                             </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: '#15803D' }} className="tabular-nums">
+
+                            {/* Commission */}
+                            <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700, color: '#15803D', borderBottom: '1px solid #FEF08A', verticalAlign: 'middle' }} className="tabular-nums">
                               {formatINR(row.commission)}
                             </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: '#B45309' }} className="tabular-nums">
+
+                            {/* Interest */}
+                            <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 700, color: '#B45309', borderBottom: '1px solid #FEF08A', verticalAlign: 'middle' }} className="tabular-nums">
                               {formatINR(row.interest)}
                             </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 900, color: '#713F12', fontSize: '15px' }} className="tabular-nums">
+
+                            {/* Total */}
+                            <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 900, color: '#713F12', fontSize: '13px', borderBottom: '1px solid #FEF08A', verticalAlign: 'middle' }} className="tabular-nums">
                               {formatINR(rowTotal)}
                             </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+
+                            {/* Tick Mark Button */}
+                            <td style={{ padding: '4px 6px', textAlign: 'center', borderBottom: '1px solid #FEF08A', verticalAlign: 'middle' }}>
                               <button
                                 type="button"
                                 onClick={() => handleToggleTick(row.id)}
                                 style={{
-                                  width: '32px',
-                                  height: '32px',
+                                  width: '30px',
+                                  height: '30px',
                                   borderRadius: '8px',
-                                  border: row.ticked ? '2px solid #16A34A' : '2px dashed #CA8A04',
-                                  background: row.ticked ? '#16A34A' : '#FEF9C3',
-                                  color: row.ticked ? '#FFFFFF' : '#CA8A04',
+                                  border: isRowTicked ? '2px solid #16A34A' : '2px dashed #CA8A04',
+                                  background: isRowTicked ? '#16A34A' : '#FEF9C3',
+                                  color: isRowTicked ? '#FFFFFF' : '#CA8A04',
                                   display: 'inline-flex',
                                   alignItems: 'center',
                                   justifyContent: 'center',
                                   cursor: 'pointer',
                                   fontWeight: 800,
-                                  boxShadow: row.ticked ? '0 2px 8px rgba(22, 163, 74, 0.35)' : 'none',
+                                  boxShadow: isRowTicked ? '0 2px 6px rgba(22, 163, 74, 0.3)' : 'none',
                                   transition: 'all 0.15s ease'
                                 }}
-                                title={row.ticked ? 'Ticked (Collected)' : 'Click to tick'}
+                                title={isRowTicked ? 'Ticked (Collected)' : 'Click to tick'}
                               >
-                                {row.ticked ? <Check size={18} strokeWidth={3} /> : <span style={{ fontSize: '11px' }}>✕</span>}
+                                {isRowTicked ? <Check size={16} strokeWidth={3} /> : <span style={{ fontSize: '10px' }}>✕</span>}
                               </button>
                             </td>
-                            <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+
+                            {/* Delete Button */}
+                            <td style={{ padding: '4px 2px', textAlign: 'center', borderBottom: '1px solid #FEF08A', verticalAlign: 'middle' }}>
                               <button
                                 type="button"
                                 onClick={() => handleRemoveRow(row.id)}
-                                style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', opacity: 0.6 }}
+                                style={{ background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', opacity: 0.6, padding: '4px' }}
                                 title="Remove row"
                               >
-                                <Trash2 size={15} />
+                                <Trash2 size={13} />
                               </button>
                             </td>
                           </tr>
@@ -649,45 +855,45 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                     justifyContent: 'space-between', 
                     alignItems: 'center', 
                     flexWrap: 'wrap', 
-                    gap: '14px', 
-                    marginTop: '20px', 
-                    padding: '16px', 
+                    gap: '12px', 
+                    marginTop: '16px', 
+                    padding: '12px 14px', 
                     background: '#FEF08A', 
-                    borderRadius: '14px',
+                    borderRadius: '12px',
                     border: '1px solid #FACC15'
                   }}
                 >
-                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
                     <div>
-                      <div style={{ fontSize: '11px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 700 }}>Ticked Members</div>
-                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#713F12' }}>
+                      <div style={{ fontSize: '10px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 700 }}>Ticked Members</div>
+                      <div style={{ fontSize: '15px', fontWeight: 800, color: '#713F12' }}>
                         {activeRows.filter(r => r.ticked).length} of {activeRows.length}
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontSize: '11px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 700 }}>Commission Total</div>
-                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#15803D' }} className="tabular-nums">
+                      <div style={{ fontSize: '10px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 700 }}>Commission Total</div>
+                      <div style={{ fontSize: '15px', fontWeight: 800, color: '#15803D' }} className="tabular-nums">
                         {formatINR(totalCommAmt)}
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontSize: '11px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 700 }}>Interest Total</div>
-                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#B45309' }} className="tabular-nums">
+                      <div style={{ fontSize: '10px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 700 }}>Interest Total</div>
+                      <div style={{ fontSize: '15px', fontWeight: 800, color: '#B45309' }} className="tabular-nums">
                         {formatINR(totalIntAmt)}
                       </div>
                     </div>
                   </div>
 
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '11px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 800 }}>Grand Full Amount</div>
-                    <div style={{ fontSize: '24px', fontWeight: 900, color: '#713F12' }} className="tabular-nums">
+                    <div style={{ fontSize: '10px', color: '#854D0E', textTransform: 'uppercase', fontWeight: 800 }}>Grand Full Amount</div>
+                    <div style={{ fontSize: '20px', fontWeight: 900, color: '#713F12' }} className="tabular-nums">
                       {formatINR(grandTotal)}
                     </div>
                   </div>
                 </div>
 
                 {/* FINISH COMMISSION BUTTON */}
-                <div style={{ marginTop: '20px', textAlign: 'center' }}>
+                <div style={{ marginTop: '16px', textAlign: 'center' }}>
                   <button
                     type="button"
                     onClick={handleFinishCommission}
@@ -696,30 +902,30 @@ export const AlertsView: React.FC<AlertsViewProps> = ({ agentId, chitis, allMemb
                     style={{
                       background: 'linear-gradient(135deg, #16A34A 0%, #15803D 100%)',
                       borderColor: '#16A34A',
-                      padding: '14px 24px',
-                      fontSize: '15px',
+                      padding: '12px 20px',
+                      fontSize: '14px',
                       fontWeight: 800,
-                      boxShadow: '0 8px 24px rgba(22, 163, 74, 0.35)',
+                      boxShadow: '0 6px 20px rgba(22, 163, 74, 0.3)',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      gap: '10px'
+                      gap: '8px'
                     }}
                   >
                     {isFinishing ? (
                       <>
-                        <Loader2 size={18} className="spin" />
+                        <Loader2 size={16} className="spin" />
                         <span>Saving to Financial History...</span>
                       </>
                     ) : (
                       <>
-                        <CheckCircle2 size={18} />
+                        <CheckCircle2 size={17} />
                         <span>🏁 FINISHED THE COMMISSION OF THIS MONTH ({formatINR(grandTotal)})</span>
                       </>
                     )}
                   </button>
-                  <div style={{ fontSize: '12px', color: '#854D0E', marginTop: '6px' }}>
-                    Saves to auditable Financial History with Chiti name, collection date, and full amount.
+                  <div style={{ fontSize: '11px', color: '#854D0E', marginTop: '5px' }}>
+                    Saves to auditable Financial History with Chiti name, collection date, Jamili names, and full amount.
                   </div>
                 </div>
               </div>

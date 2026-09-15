@@ -14,7 +14,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     { id: 'home', label: 'Home', icon: Home },
     { id: 'collect', label: 'Collect', icon: CreditCard },
     { id: 'digital-book', label: 'Book', icon: Image },
-    { id: 'alerts', label: 'Alerts', icon: Bell },
+    { id: 'alerts', label: 'Commission', icon: Award },
     { id: 'history', label: 'History', icon: BookOpen }
   ];
 
